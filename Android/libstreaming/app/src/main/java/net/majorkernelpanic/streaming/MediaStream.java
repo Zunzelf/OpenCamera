@@ -97,8 +97,9 @@ public abstract class MediaStream implements Stream {
 		// We determine whether or not the MediaCodec API should be used
 		try {
 			Class.forName("android.media.MediaCodec");
-			// Will be set to MODE_MEDIACODEC_API at some point...
-			sSuggestedMode = MODE_MEDIACODEC_API;
+			// Surface input (API 18+): the camera renders straight into the
+			// encoder on the GPU, no NV21 copies/conversion in Java.
+			sSuggestedMode = Build.VERSION.SDK_INT >= 18 ? MODE_MEDIACODEC_API_2 : MODE_MEDIACODEC_API;
 			Log.i(TAG,"Phone supports the MediaCoded API");
 		} catch (ClassNotFoundException e) {
 			sSuggestedMode = MODE_MEDIARECORDER_API;

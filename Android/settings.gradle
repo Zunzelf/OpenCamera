@@ -1,4 +1,15 @@
-include ':app'
-include ':libstreaming'
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
 rootProject.name = "OpenCamera"
-project(':libstreaming').projectDir = new File(rootProject.projectDir,"\\libstreaming\\app\\")
+include ':app'

@@ -1,37 +1,40 @@
 apply plugin: 'com.android.application'
 
 android {
-    compileSdkVersion 30
-    buildToolsVersion "30.0.3"
+    namespace = 'com.cns.encom'
+    compileSdk = 36
 
     defaultConfig {
-        applicationId "com.cns.encom"
-        minSdkVersion 21
-        targetSdkVersion 30
-        versionCode 8
-        versionName "2.1.2"
-
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        applicationId = "com.cns.encom"
+        minSdk = 21
+        targetSdk = 36
+        versionCode = 9
+        versionName = "3.0.0"
     }
 
     buildTypes {
         release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            minifyEnabled = false
         }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    // libstreaming (RTSP server + H.264 encoder glue) is vendored source,
+    // compiled straight into the app: one module, no AAR/lint tooling needed.
+    sourceSets {
+        main {
+            java.srcDirs += ['../libstreaming/app/src/main/java']
+        }
+    }
+
+    lint {
+        abortOnError = false
     }
 }
 
-dependencies {
-    implementation fileTree(dir: "libs", include: ["*.jar"])
-    implementation 'androidx.appcompat:appcompat:1.1.0'
-    implementation 'com.google.android.material:material:1.0.0'
-    implementation 'androidx.constraintlayout:constraintlayout:1.1.3'
-    implementation 'androidx.navigation:navigation-fragment:2.1.0'
-    implementation 'androidx.navigation:navigation-ui:2.1.0'
-    testImplementation 'junit:junit:4.12'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.1'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.2.0'
-    implementation project(':libstreaming')
-
-}
+// No AndroidX/support libraries: the UI uses framework widgets only, which
+// keeps the APK small and the build free of extra downloads.

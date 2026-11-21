@@ -18,19 +18,16 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="main.hpp">
+    <ClInclude Include="Ui.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="myUI.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="myNetwork.hpp">
+    <ClInclude Include="PhoneLink.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="myCamera.hpp">
+    <ClInclude Include="VideoReceiver.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -50,16 +47,16 @@
     <ClCompile Include="..\external\ImGui\src\imgui_widgets.cpp">
       <Filter>Source Files\ImGui</Filter>
     </ClCompile>
-    <ClCompile Include="myUI.cpp">
+    <ClCompile Include="Ui.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="myNetwork.cpp">
+    <ClCompile Include="PhoneLink.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="myCamera.cpp">
+    <ClCompile Include="VideoReceiver.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

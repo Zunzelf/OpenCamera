@@ -59,4 +59,6 @@ regsvr32 /U EncomCamerax64.dll
 -----
 
 ### Administrator Requirement  
-In order to allocate global memory that is accessible for directshow dlls, __this program requires administrator level__.
+Not needed any more: frames are shared through `Local\` named memory (see `shared/FrameShm.h`).  
+Only registering the virtual camera needs admin once; the app's "Install virtual camera" button does it with a single UAC prompt.  
+See `../IMPROVEMENTS.md` for the full list of changes.

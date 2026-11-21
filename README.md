@@ -10,7 +10,7 @@ This is a reworked version of [OpenCamera](https://github.com/changliu98/OpenCam
 
 ## What it does
 
-- **Phone as webcam:** shows up as a camera called "OpenCamera" in Zoom, Teams, Discord, OBS and browsers.
+- **Phone as webcam:** shows up as a camera called "OpenCamera Z" in Zoom, Teams, Discord, OBS and browsers.
 - **Wi-Fi or USB cable:** the phone finds the PC by itself on the same Wi-Fi. Plug in a cable with USB debugging on and it moves to the cable automatically, then back to Wi-Fi if you unplug it. The PC shows which one is in use.
 - **Pro controls on the PC:** ISO, shutter, exposure compensation, white balance (presets or Kelvin), manual focus, zoom, exposure lock, the phone's light, stabilisation and anti-flicker. Click the picture to focus there.
 - **Monitoring aids:** grid, histogram, zebra (clipped highlights), focus peaking and a level line.
@@ -25,16 +25,20 @@ This is a reworked version of [OpenCamera](https://github.com/changliu98/OpenCam
   <img src="Assets/screens/pc-phone-card.png" width="300" alt="PC app showing the phone connected by USB cable">
 </p>
 
+## Download
+
+Get the latest PC app (`OpenCameraZ-…-windows-x64.zip`) and phone app (`OpenCameraZ-….apk`) from the [Releases page](https://github.com/Zunzelf/OpenCamera/releases).
+
 ## How to use it
 
 You need a Windows 10/11 PC (64-bit) and an Android phone (Android 5 or newer).
 
-1. Install and open OpenCamera on the PC. Click **Install virtual camera** once (Windows asks for permission).
+1. Unzip the PC app somewhere it can stay, run `OpenCameraZ.exe` and click **Install virtual camera** once (Windows asks for permission).
 2. Open the OpenCamera app on the phone.
 3. Connect them in one of these ways:
    - **Wi-Fi:** put both on the same Wi-Fi, then tap the PC's name in the phone app. A phone hotspot works too. If Windows Firewall asks, allow OpenCamera on private networks.
    - **USB cable:** turn on USB debugging on the phone and plug it in. The PC uses `adb` (from the Android SDK platform-tools, scrcpy, or placed next to OpenCamera) and connects through the cable by itself.
-4. Pick **OpenCamera** as the camera in your video app.
+4. Pick **OpenCamera Z** as the camera in your video app.
 
 Keep the phone app open while you use the camera; Android doesn't let apps use the camera in the background.
 

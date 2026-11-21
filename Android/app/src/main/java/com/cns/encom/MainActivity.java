@@ -107,7 +107,8 @@ public class MainActivity extends Activity {
                 if (error == RtspServer.ERROR_BIND_FAILED) {
                     // port taken: pick another one next time
                     rtspPort = 20000 + new Random().nextInt(10000);
-                    prefs.edit().putInt("rtsp_port", rtspPort).apply();
+                    prefs.edit().putInt("ocam_rtsp_port", rtspPort)
+                            .putString(RtspServer.KEY_PORT, String.valueOf(rtspPort)).apply();
                 }
             });
         }
@@ -140,11 +141,13 @@ public class MainActivity extends Activity {
         address = findViewById(R.id.address);
         grant = findViewById(R.id.grant);
 
-        rtspPort = prefs.getInt("rtsp_port", 0);
-        if (rtspPort < 1024) {
-            rtspPort = 20000 + new Random().nextInt(10000);
-            prefs.edit().putInt("rtsp_port", rtspPort).apply();
-        }
+        // Our own key: libstreaming owns "rtsp_port" and stores it as a String.
+        rtspPort = prefs.getInt("ocam_rtsp_port", 0);
+        if (rtspPort < 1024) rtspPort = 20000 + new Random().nextInt(10000);
+        // Write the library's copy before the service can be bound and created.
+        prefs.edit().remove(RtspServer.KEY_PORT)
+                .putInt("ocam_rtsp_port", rtspPort)
+                .putString(RtspServer.KEY_PORT, String.valueOf(rtspPort)).commit();
         address.setText(prefs.getString("last_host", ""));
 
         SurfaceView preview = findViewById(R.id.preview);

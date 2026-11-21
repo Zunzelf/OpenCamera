@@ -229,12 +229,22 @@ public class RtspServer extends Service {
 		return START_STICKY;
 	}
 
+	/** Tolerates the port being stored as a String (libstreaming) or an int. */
+	private static int readPort(SharedPreferences p, int fallback) {
+		Object v = p.getAll().get(KEY_PORT);
+		if (v instanceof Integer) return (Integer) v;
+		if (v instanceof String) {
+			try { return Integer.parseInt((String) v); } catch (NumberFormatException ignored) { }
+		}
+		return fallback;
+	}
+
 	@Override
 	public void onCreate() {
 
 		// Let's restore the state of the service 
 		mSharedPreferences = PreferenceManager.getDefaultSharedPreferences(this);
-		mPort = Integer.parseInt(mSharedPreferences.getString(KEY_PORT, String.valueOf(mPort)));
+		mPort = readPort(mSharedPreferences, mPort);
 		mEnabled = mSharedPreferences.getBoolean(KEY_ENABLED, mEnabled);
 
 		// If the configuration is modified, the server will adjust
@@ -254,7 +264,7 @@ public class RtspServer extends Service {
 		public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
 
 			if (key.equals(KEY_PORT)) {
-				int port = Integer.parseInt(sharedPreferences.getString(KEY_PORT, String.valueOf(mPort)));
+				int port = readPort(sharedPreferences, mPort);
 				if (port != mPort) {
 					mPort = port;
 					mRestart = true;

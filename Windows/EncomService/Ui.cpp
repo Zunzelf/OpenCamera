@@ -58,7 +58,7 @@ bool Ui::init()
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
 	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 	m_window = SDL_CreateWindow("OpenCamera", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-		(int)px(1040), (int)px(640), SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+		(int)px(1040), (int)px(700), SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
 	if (!m_window)
 	{
 		fatal(std::string("Could not open the OpenCamera window.\n\n") + SDL_GetError());
@@ -185,11 +185,20 @@ void Ui::refreshEnvironment(bool force)
 	if (!force && now - m_lastEnvRefresh < 3000) return;
 	m_lastEnvRefresh = now;
 	m_addresses = PhoneLink::localAddresses();
-	HKEY k;
-	m_vcamInstalled = RegOpenKeyExA(HKEY_CLASSES_ROOT, kVcamKey, 0, KEY_READ | KEY_WOW64_64KEY, &k) == ERROR_SUCCESS;
-	if (m_vcamInstalled) RegCloseKey(k);
-	m_vcam32Installed = RegOpenKeyExA(HKEY_CLASSES_ROOT, kVcamKey, 0, KEY_READ | KEY_WOW64_32KEY, &k) == ERROR_SUCCESS;
-	if (m_vcam32Installed) RegCloseKey(k);
+	if (m_ourDll64.empty())
+	{
+		char exe[MAX_PATH] = {};
+		GetModuleFileNameA(NULL, exe, MAX_PATH);
+		std::string dir(exe);
+		m_ourDll64 = dir.substr(0, dir.find_last_of("\\/")) + "\\EncomCamerax64.dll";
+	}
+	// The CLSID comes from a widely copied sample, and the original OpenCamera
+	// uses it too: only call it installed if it points at *our* DLL.
+	char path[MAX_PATH * 2] = {};
+	DWORD size = sizeof(path);
+	const bool registered = RegGetValueA(HKEY_CLASSES_ROOT, kVcamKey, nullptr, RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, nullptr, path, &size) == ERROR_SUCCESS;
+	m_vcamInstalled = registered && _stricmp(path, m_ourDll64.c_str()) == 0;
+	m_vcamOther = registered && !m_vcamInstalled;
 }
 
 void Ui::installVirtualCamera()
@@ -395,7 +404,7 @@ bool Ui::primaryButton(const char* label, const ImVec2& size, ImU32 color)
 	return clicked;
 }
 
-void Ui::statusPill(const ImVec2& rightTop)
+float Ui::statusPill(const ImVec2& rightTop)
 {
 	const Phase ph = g_app.phase.load();
 	const char* text = "Waiting for phone";
@@ -422,6 +431,7 @@ void Ui::statusPill(const ImVec2& rightTop)
 	dl->AddCircleFilled(ImVec2(a.x + px(16) + dot, a.y + h * 0.5f), dot, U32(c, pulse));
 	dl->AddText(ImVec2(a.x + px(16) + dot * 2 + px(10), a.y + (h - ts.y) * 0.5f), U32(c), text);
 	ImGui::PopFont();
+	return w;
 }
 
 // ------------------------------------------------------------------ layout
@@ -466,7 +476,17 @@ void Ui::drawHeader()
 	ImGui::SameLine();
 	ImGui::SetCursorPosY(ImGui::GetCursorPosY() + px(6));
 	ImGui::TextColored(col::muted, "phone as webcam");
-	statusPill(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x, p.y - px(1)));
+	const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+	const float pillW = statusPill(ImVec2(right, p.y - px(1)));
+	const char* actLabel = "Activity log";
+	const float actW = ImGui::CalcTextSize(actLabel).x + px(24);
+	ImGui::SetCursorScreenPos(ImVec2(right - pillW - px(10) - actW, p.y - px(1)));
+	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+	ImGui::PushStyleColor(ImGuiCol_Text, col::muted);
+	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, px(16));
+	if (ImGui::Button(actLabel, ImVec2(actW, px(32)))) m_showActivity = true;
+	ImGui::PopStyleVar();
+	ImGui::PopStyleColor(2);
 	ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + s + px(16)));
 }
 
@@ -539,6 +559,7 @@ void Ui::drawOnboarding(const ImVec2& origin, const ImVec2& size)
 	}
 
 	ImGui::SetCursorScreenPos(ImVec2(x0, y));
+	ImGui::BeginGroup(); // later lines start at x0, not the panel edge
 	if (ph == Phase::Error)
 	{
 		ImGui::PushFont(m_fontTitle);
@@ -547,6 +568,7 @@ void Ui::drawOnboarding(const ImVec2& origin, const ImVec2& size)
 		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + colW);
 		ImGui::TextColored(col::muted, "%s", detail.c_str());
 		ImGui::PopTextWrapPos();
+		ImGui::EndGroup();
 		return;
 	}
 
@@ -621,12 +643,13 @@ void Ui::drawOnboarding(const ImVec2& origin, const ImVec2& size)
 	ImGui::TextColored(col::muted, "If the phone can't find this PC, allow OpenCamera in the Windows Firewall prompt (Private networks).");
 	ImGui::PopTextWrapPos();
 	ImGui::PopFont();
+	ImGui::EndGroup();
 }
 
 void Ui::drawSidebar(const ImVec2& size)
 {
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, col::bg);
-	ImGui::BeginChild("##side", size, false, ImGuiWindowFlags_NoScrollbar);
+	ImGui::BeginChild("##side", size, false); // scrolls only if the window is very short
 	ImGui::PopStyleColor();
 	const Phase ph = g_app.phase.load();
 	const bool connected = ph == Phase::Live || ph == Phase::Connecting || ph == Phase::Reconnecting;
@@ -709,35 +732,23 @@ void Ui::drawSidebar(const ImVec2& size)
 	ImGui::Dummy(ImVec2(0, px(2)));
 
 	// Virtual camera install state
-	const float rest = ImGui::GetContentRegionAvail().y - px(44);
-	card("##vcam", std::max(px(96), std::min(rest, px(124))), [&]() {
+	card("##vcam", std::max(px(110), std::min(ImGui::GetContentRegionAvail().y, px(132))), [&]() {
 		section("VIRTUAL CAMERA");
 		ImGui::PushFont(m_fontSmall);
+		ImGui::PushTextWrapPos(0);
 		if (m_vcamInstalled)
-		{
-			ImGui::PushTextWrapPos(0);
-			ImGui::TextColored(col::good, "Installed.");
-			ImGui::SameLine(0, px(4));
-			ImGui::TextColored(col::muted, "Choose \"OpenCamera\" as the camera in your video app.");
-			ImGui::PopTextWrapPos();
-		}
+			ImGui::TextColored(col::muted, "Installed. Choose \"OpenCamera\" as the camera in your video app.");
+		else if (m_vcamOther)
+			ImGui::TextColored(col::warn, "An older OpenCamera camera is installed. Update it so video apps get this picture.");
 		else
-		{
-			ImGui::PushTextWrapPos(0);
 			ImGui::TextColored(col::warn, "Not installed yet. Video apps can't see OpenCamera until it is.");
-			ImGui::PopTextWrapPos();
-		}
+		ImGui::PopTextWrapPos();
 		ImGui::PopFont();
-		if (!m_vcamInstalled && primaryButton("Install virtual camera", ImVec2(ImGui::GetContentRegionAvail().x, px(34)), U32(col::accent)))
+		if (!m_vcamInstalled && primaryButton(m_vcamOther ? "Update virtual camera" : "Install virtual camera",
+		                                      ImVec2(ImGui::GetContentRegionAvail().x, px(34)), U32(col::accent)))
 			installVirtualCamera();
 	});
 
-	// Footer
-	ImGui::SetCursorPosY(ImGui::GetWindowHeight() - px(36));
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-	ImGui::PushStyleColor(ImGuiCol_Text, col::muted);
-	if (ImGui::Button("Activity log")) m_showActivity = true;
-	ImGui::PopStyleColor(2);
 	ImGui::EndChild();
 }
 

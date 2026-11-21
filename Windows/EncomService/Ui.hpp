@@ -37,7 +37,7 @@ private:
 	bool toggle(const char* label, bool* v, const char* hint = nullptr);
 	bool primaryButton(const char* label, const ImVec2& size, ImU32 color);
 	void spinner(const ImVec2& center, float radius, ImU32 color);
-	void statusPill(const ImVec2& pos);
+	float statusPill(const ImVec2& pos);
 
 	float px(float v) const { return v * m_scale; }
 
@@ -58,7 +58,8 @@ private:
 
 	bool m_showActivity = false;
 	bool m_vcamInstalled = false;
-	bool m_vcam32Installed = false;
+	bool m_vcamOther = false; // CLSID registered to a different (older) DLL
+	std::string m_ourDll64;
 	std::vector<std::string> m_addresses;
 	std::string m_pcName;
 	uint32_t m_lastEnvRefresh = 0;

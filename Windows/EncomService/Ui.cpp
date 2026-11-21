@@ -685,7 +685,7 @@ void Ui::drawSidebar(const ImVec2& size)
 	const PhoneStatus pst = g_app.getStatus();
 	const bool showBattery = connected && pst.valid && pst.battery >= 0;
 	const bool phoneHot = showBattery && pst.temperature >= 42;
-	card("##phone", connected ? (showBattery ? (phoneHot ? px(164) : px(146)) : px(122)) : px(78), [&]() {
+	card("##phone", connected ? (showBattery ? (phoneHot ? (pst.charging ? px(182) : px(164)) : px(146)) : px(122)) : px(78), [&]() {
 		section("PHONE");
 		if (connected)
 		{
@@ -719,7 +719,10 @@ void Ui::drawSidebar(const ImVec2& size)
 				if (hot)
 				{
 					ImGui::PushTextWrapPos(0);
-					ImGui::TextColored(col::warn, "Phone is warm (%d" U8_DEG "C). Lower the quality or turn off its preview.", pst.temperature);
+					if (pst.charging)
+						ImGui::TextColored(col::warn, "Phone is warm (%d" U8_DEG "C) while charging. Charging adds heat: lower the quality, turn off its preview, or take off its case.", pst.temperature);
+					else
+						ImGui::TextColored(col::warn, "Phone is warm (%d" U8_DEG "C). Lower the quality or turn off its preview.", pst.temperature);
 					ImGui::PopTextWrapPos();
 				}
 				else

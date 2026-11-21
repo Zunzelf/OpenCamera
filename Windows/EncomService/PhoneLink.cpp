@@ -335,6 +335,9 @@ bool PhoneLink::start()
 	g_app.setMessage("Waiting for your phone", "");
 	m_control = std::thread(&PhoneLink::controlLoop, this);
 	m_discovery = std::thread(&PhoneLink::discoveryLoop, this);
+#ifndef OPENCAMERA_LOOPBACK_TEST
+	m_adb.start();
+#endif
 	g_app.log(LogLevel::Info, "Ready. Listening on port 65500.");
 	return true;
 }
@@ -347,6 +350,7 @@ void PhoneLink::stop()
 	if (m_listen != INVALID_SOCKET) closesocket(m_listen);
 	if (m_udp != INVALID_SOCKET) closesocket(m_udp);
 	m_listen = m_udp = INVALID_SOCKET;
+	m_adb.stop();
 	if (m_control.joinable()) m_control.join();
 	if (m_discovery.joinable()) m_discovery.join();
 	if (m_video.joinable()) m_video.join();
@@ -385,6 +389,19 @@ void PhoneLink::discoveryLoop()
 		return;
 	}
 	const std::string reply = "OPENCAMERA1|" + computerName() + "|" + std::to_string(kControlPort);
+	// Phones on the USB cable ask over TCP (adb reverse carries TCP only). Loopback only.
+	m_tcpProbe = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	{
+		sockaddr_in lo{};
+		lo.sin_family = AF_INET;
+		lo.sin_port = htons(kDiscoveryPort);
+		lo.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		if (m_tcpProbe != INVALID_SOCKET && (bind(m_tcpProbe, (sockaddr*)&lo, sizeof(lo)) == SOCKET_ERROR || listen(m_tcpProbe, 4) == SOCKET_ERROR))
+		{
+			closesocket(m_tcpProbe);
+			m_tcpProbe = INVALID_SOCKET;
+		}
+	}
 	sockaddr_in bcast{};
 	bcast.sin_family = AF_INET;
 	bcast.sin_port = htons(kDiscoveryPort);
@@ -399,7 +416,21 @@ void PhoneLink::discoveryLoop()
 			sendto(m_udp, reply.c_str(), (int)reply.size(), 0, (sockaddr*)&bcast, sizeof(bcast));
 			lastBeacon = now;
 		}
-		if (WaitReadable(m_udp, 250) <= 0) continue;
+		if (m_tcpProbe != INVALID_SOCKET && WaitReadable(m_tcpProbe, 0) > 0)
+		{
+			SOCKET c = accept(m_tcpProbe, nullptr, nullptr);
+			if (c != INVALID_SOCKET)
+			{
+				char q[32] = {};
+				if (WaitReadable(c, 500) > 0 && recv(c, q, sizeof(q) - 1, 0) > 0 && strncmp(q, "OPENCAMERA?", 11) == 0)
+				{
+					const std::string line = reply + "\n";
+					send(c, line.c_str(), (int)line.size(), 0);
+				}
+				closesocket(c);
+			}
+		}
+		if (WaitReadable(m_udp, 150) <= 0) continue;
 		char buf[256];
 		sockaddr_in from{};
 		int fromLen = sizeof(from);
@@ -409,6 +440,8 @@ void PhoneLink::discoveryLoop()
 		if (strncmp(buf, "OPENCAMERA?", 11) == 0)
 			sendto(m_udp, reply.c_str(), (int)reply.size(), 0, (sockaddr*)&from, fromLen);
 	}
+	if (m_tcpProbe != INVALID_SOCKET) closesocket(m_tcpProbe);
+	m_tcpProbe = INVALID_SOCKET;
 }
 
 void PhoneLink::controlLoop()
@@ -462,7 +495,8 @@ void PhoneLink::controlLoop()
 			closesocket(client);
 			continue;
 		}
-		g_app.linkKind = LinkKind(client);
+		// Through adb the phone shows up as 127.0.0.1: that is the USB cable.
+		g_app.linkKind = (peer.sin_addr.s_addr == htonl(INADDR_LOOPBACK) && !m_adb.serial().empty()) ? 2 : LinkKind(client);
 		g_app.setPhone(name.empty() ? "Phone" : name, host);
 		{
 			static const char* kinds[] = { "", " over Wi-Fi", " over the USB cable", " over a network cable", " on this PC" };
@@ -490,10 +524,21 @@ bool PhoneLink::handshake(SOCKET s, const std::string& peer, int& rtspPort, std:
 
 	// Optional name block from the new phone app. Old app sends heartbeats
 	// (0x00 0x01), which never match the magic.
-	if (WaitReadable(s, 300) > 0)
+	// Through the USB cable (adb) it can arrive in pieces, so wait for 4 bytes.
+	uint32_t peek = 0;
+	int peeked = 0;
+	for (int i = 0; i < 75 && m_running; i++)
 	{
-		uint32_t peek = 0;
-		if (recv(s, (char*)&peek, 4, MSG_PEEK) == 4 && ntohl(peek) == kNameMagic)
+		if (WaitReadable(s, 20) > 0)
+		{
+			peeked = recv(s, (char*)&peek, 4, MSG_PEEK);
+			if (peeked >= 4 || peeked <= 0) break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(20)); // part of it so far
+		}
+	}
+	if (peeked == 4)
+	{
+		if (ntohl(peek) == kNameMagic)
 		{
 			int32_t magic = 0, len = 0;
 			RecvInt(s, magic, 1000, m_running);
@@ -757,6 +802,15 @@ void PhoneLink::videoLoop(std::string host, int port)
 		std::ostringstream url;
 		const int fps = std::max(10, std::min(120, g_app.frameRate.load()));
 		const int kbps = (int)(q.kbps * std::max(1.0, fps / 30.0)); // more frames need more bits
+		// USB cable: reach the phone's RTSP port through adb, RTP inside the RTSP connection.
+		const bool viaAdb = host == "127.0.0.1" && !m_adb.serial().empty();
+		if (viaAdb && !m_adb.forward(port))
+		{
+			g_app.log(LogLevel::Warning, "Couldn't reach the phone through the USB cable (adb forward failed). Retrying...");
+			for (int i = 0; i < 20 && !m_stopVideo; i++)
+				std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			continue;
+		}
 		url << "rtsp://" << host << ":" << port << "?h264=" << kbps << "-" << fps << "-" << q.width << "-" << q.height
 		    << "&camera=" << (g_app.frontCamera ? "front" : "back");
 		g_app.requestRestartVideo = false;
@@ -767,6 +821,7 @@ void PhoneLink::videoLoop(std::string host, int port)
 
 		VideoReceiver::Options opt;
 		opt.gpuDecode = g_app.gpuDecode;
+		opt.tcp = viaAdb;
 		std::string err;
 		if (!rx.open(url.str(), opt, &m_stopVideo, err))
 		{

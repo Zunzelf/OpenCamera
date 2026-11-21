@@ -76,6 +76,8 @@ Camera-style manual controls on the PC, sent to the phone over the existing cont
 - The PC shows a **"Wi-Fi" or "USB cable"** badge next to the phone's name (from the Windows adapter the connection arrived on; USB tethering appears as a Remote NDIS/NCM adapter). The phone's status chip says the same.
 - The phone groups each PC's addresses. With **"Prefer the USB cable"** on (default), it moves to the cable within about 2 s of the PC answering there, and goes back to Wi-Fi if the cable goes away.
 - **"Use USB cable instead of Wi-Fi"** on the phone checks the cable is plugged in, then opens Android's tethering screen; turning USB tethering on stays the user's tap.
+- **Cable only, no tethering (adb):** when USB debugging is on and `adb.exe` is found (next to OpenCamera, on PATH, or in the Android SDK), the PC runs `adb reverse` for ports 65500/65501 so the phone reaches it at 127.0.0.1 through the cable, and `adb forward` for the phone's RTSP port. Video then runs as RTP inside the RTSP connection (`rtsp_transport=tcp`; the phone's RTSP server now answers `RTP/AVP/TCP;interleaved`). No firewall change is needed (loopback only). Tested live: 30 fps at 4.5 Mbps over the cable; after an adb restart it was live on the cable again within about 10 s, and with the cable path gone it fell back to Wi-Fi within about 10 s.
+- adb is started with only its output pipe inherited, so the adb server never holds OpenCamera's ports.
 - Windows names the tethering network "Unidentified network" and treats it as **Public**. OpenCamera's firewall rule on this PC only allows **Private** networks, so the phone stays on Wi-Fi until that network is set to Private in Windows settings.
 
 ## What was verified, and what wasn't

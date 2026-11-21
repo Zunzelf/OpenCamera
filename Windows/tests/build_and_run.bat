@@ -13,7 +13,7 @@ set CL=/nologo /EHsc /O2 /std:c++17 /DNOMINMAX /DWIN32_LEAN_AND_MEAN /I "%SRC%" 
 set LIBS=/link /LIBPATH:"%FF%\lib" avformat.lib avcodec.lib avutil.lib swscale.lib advapi32.lib shell32.lib
 cl ..\test_shm.cpp /Fe:test_shm.exe /link advapi32.lib || exit /b 1
 cl ..\test_pipeline.cpp "%SRC%\VideoReceiver.cpp" /Fe:test_pipeline.exe %LIBS% || exit /b 1
-cl /DOPENCAMERA_LOOPBACK_TEST ..\test_link.cpp "%SRC%\PhoneLink.cpp" "%SRC%\AppState.cpp" "%SRC%\VideoReceiver.cpp" /Fe:test_link.exe %LIBS% || exit /b 1
+cl /DOPENCAMERA_LOOPBACK_TEST ..\test_link.cpp "%SRC%\PhoneLink.cpp" "%SRC%\AdbBridge.cpp" "%SRC%\AppState.cpp" "%SRC%\VideoReceiver.cpp" /Fe:test_link.exe %LIBS% || exit /b 1
 set PATH=%FF%\bin;%PATH%
 "%FF%\bin\ffmpeg.exe" -hide_banner -loglevel error -y -f lavfi -i "color=c=0x2050C0:s=1280x720:r=30:d=4,drawbox=x=0:y=0:w=iw:h=40:color=white:t=fill" -c:v libx264 -pix_fmt yuv420p -g 30 t720.mp4
 "%FF%\bin\ffmpeg.exe" -hide_banner -loglevel error -y -f lavfi -i "color=c=0x2050C0:s=1920x1080:r=30:d=4,drawbox=x=0:y=0:w=iw:h=60:color=white:t=fill" -c:v libx264 -pix_fmt yuvj420p -color_range pc -g 30 t1080j.mp4

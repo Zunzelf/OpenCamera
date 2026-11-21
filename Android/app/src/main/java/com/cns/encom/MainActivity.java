@@ -43,6 +43,7 @@ import android.widget.Toast;
 import net.majorkernelpanic.streaming.SessionBuilder;
 import net.majorkernelpanic.streaming.rtsp.RtspServer;
 
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -239,7 +240,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
-        stopDiscovery();
+        // While connected, keep looking: a USB pop-up (e.g. MIUI's "Use USB for")
+        // can cover the app right when the cable comes back.
+        if (link == null) stopDiscovery();
     }
 
     @Override
@@ -263,6 +266,7 @@ public class MainActivity extends Activity {
         ui.removeCallbacks(dimNow);
         camera.clearListener(cameraListener);
         disconnect();
+        stopDiscovery();
         if (rtspBound) {
             if (rtsp != null) rtsp.removeCallbackListener(rtspListener);
             unbindService(rtspConnection);
@@ -424,6 +428,7 @@ public class MainActivity extends Activity {
                         try { sock.send(new DatagramPacket(probe, probe.length, t, DISCOVERY_PORT)); } catch (IOException ignored) { }
                     }
                     nextProbe = now + 1500;
+                    probeUsbCable();
                     pruneStale(now);
                 }
                 try {
@@ -468,6 +473,40 @@ public class MainActivity extends Activity {
             }
         }
         if (changed) ui.post(() -> { renderPcList(); renderUsbButton(); });
+    }
+
+    /**
+     * USB cable without tethering: when the PC has set up "adb reverse" (USB debugging on),
+     * 127.0.0.1:65501 on this phone leads to the PC, which answers like a discovery reply.
+     */
+    private void probeUsbCable() {
+        Socket s = new Socket();
+        try {
+            s.connect(new InetSocketAddress("127.0.0.1", DISCOVERY_PORT), 300);
+            s.setSoTimeout(700);
+            s.getOutputStream().write("OPENCAMERA?\n".getBytes(StandardCharsets.US_ASCII));
+            BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
+            String msg = in.readLine();
+            if (msg == null || !msg.startsWith("OPENCAMERA1|")) return;
+            String[] parts = msg.split("\\|");
+            String host = "127.0.0.1";
+            String name = parts.length > 1 && !parts[1].isEmpty() ? parts[1] : "PC (USB cable)";
+            boolean isNew;
+            Pc pc;
+            synchronized (found) {
+                pc = found.get(name);
+                if (pc == null) { pc = new Pc(); pc.name = name; found.put(name, pc); }
+                isNew = !pc.seen.containsKey(host);
+                pc.seen.put(host, System.currentTimeMillis());
+                pc.usb.put(host, true);
+            }
+            final Pc fpc = pc;
+            if (isNew) ui.post(() -> { renderPcList(); renderUsbButton(); maybeAutoConnect(fpc); });
+        } catch (IOException ignored) {
+            // no cable, USB debugging off, or OpenCamera not running on the PC
+        } finally {
+            try { s.close(); } catch (IOException ignored) { }
+        }
     }
 
     // ------------------------------------------------------------ Wi-Fi or USB cable
@@ -553,6 +592,13 @@ public class MainActivity extends Activity {
              .setMessage("Connect this phone to the PC with a USB cable, then tap this button again.\n\n"
                      + "A cable is steadier than Wi-Fi and charges the phone while you film.")
              .setPositiveButton("OK", null);
+        } else if (usbDebuggingOn()) {
+            d.setTitle("Using the USB cable")
+             .setMessage("USB debugging is on, so OpenCamera on the PC switches to the cable by itself within a few seconds.\n\n"
+                     + "Not switching? Make sure OpenCamera is open on the PC, and tap \"Allow\" if the phone asks about USB debugging. "
+                     + "You can also turn on USB tethering instead.")
+             .setPositiveButton("OK", null)
+             .setNeutralButton("USB tethering", (x, y) -> openTetherSettings());
         } else {
             d.setTitle("Turn on USB tethering")
              .setMessage("Android will open its sharing settings. Turn on \"USB tethering\", then come back here.\n\n"
@@ -561,6 +607,11 @@ public class MainActivity extends Activity {
              .setNegativeButton("Cancel", null);
         }
         d.show();
+    }
+
+    private boolean usbDebuggingOn() {
+        try { return Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0) == 1; }
+        catch (Exception e) { return false; }
     }
 
     private void openTetherSettings() {
@@ -960,6 +1011,8 @@ public class MainActivity extends Activity {
         /** Move to a better path: the cable appeared, or the cable we were on went away. */
         private boolean shouldMove(Socket s) {
             if (viaUsb) {
+                if (s.getInetAddress().isLoopbackAddress()) // adb: the socket closes when the cable goes
+                    return !prefs.getBoolean("prefer_usb", true) && !pickHost().equals(host);
                 try {
                     NetworkInterface ni = NetworkInterface.getByInetAddress(s.getLocalAddress());
                     if (ni == null || !ni.isUp()) return true;
@@ -1049,12 +1102,13 @@ public class MainActivity extends Activity {
                     s.connect(new InetSocketAddress(host, CONTROL_PORT), 3000);
                     try {
                         NetworkInterface ni = NetworkInterface.getByInetAddress(s.getLocalAddress());
-                        viaUsb = ni != null && isUsbInterface(ni);
+                        viaUsb = s.getInetAddress().isLoopbackAddress() || (ni != null && isUsbInterface(ni));
                     } catch (Exception e) { viaUsb = false; }
                     ui.post(MainActivity.this::renderUsbButton);
                     s.setTcpNoDelay(true);
                     startRtsp();
-                    DataOutputStream out = new DataOutputStream(s.getOutputStream());
+                    // Buffered: the hello goes out in one piece (matters over adb); every write below flushes.
+                    DataOutputStream out = new DataOutputStream(new BufferedOutputStream(s.getOutputStream(), 8192));
                     this.out = out;
                     pcTalksBack = false;
                     Thread reader = new Thread(() -> readLoop(s), "link-read");

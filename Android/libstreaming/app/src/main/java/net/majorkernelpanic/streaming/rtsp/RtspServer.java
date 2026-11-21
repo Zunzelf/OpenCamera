@@ -424,7 +424,8 @@ public class RtspServer extends Service {
 				// We always send a response
 				// The client will receive an "INTERNAL SERVER ERROR" if an exception has been thrown at some point
 				try {
-					response.send(mOutput);
+					// RTP may already be flowing on this connection (TCP transport).
+					synchronized (mOutput) { response.send(mOutput); }
 				} catch (IOException e) {
 					Log.e(TAG,"Response was not sent properly");
 					break;
@@ -519,8 +520,30 @@ public class RtspServer extends Service {
                         return response;
                     }
 
+                    String transport = request.headers.get("transport");
+                    if (transport == null) transport = "";
+                    // RTP/AVP/TCP;interleaved=a-b: packets go inside this RTSP connection
+                    // (used over the USB cable, where adb only carries TCP).
+                    Matcher il = Pattern.compile("interleaved=(\\d+)(?:-(\\d+))?", Pattern.CASE_INSENSITIVE).matcher(transport);
+                    if (transport.toUpperCase().contains("RTP/AVP/TCP") && il.find()) {
+                        int ch = Integer.parseInt(il.group(1));
+                        int[] ports = mSession.getTrack(trackId).getDestinationPorts();
+                        mSession.getTrack(trackId).setDestinationPorts(ports[0], ports[1]);
+                        mSession.getTrack(trackId).setOutputStream(mOutput, (byte) ch);
+                        ssrc = mSession.getTrack(trackId).getSSRC();
+                        boolean streamingTcp = isStreaming();
+                        mSession.syncStart(trackId);
+                        if (!streamingTcp && isStreaming()) postMessage(MESSAGE_STREAMING_STARTED);
+                        response.attributes = "Transport: RTP/AVP/TCP;unicast;interleaved=" + ch + "-" + (ch + 1) +
+                                ";ssrc=" + Integer.toHexString(ssrc) + ";mode=play\r\n" +
+                                "Session: " + "1185d20035702ca" + "\r\n" +
+                                "Cache-Control: no-cache\r\n";
+                        response.status = Response.STATUS_OK;
+                        return response;
+                    }
+
                     p = Pattern.compile("client_port=(\\d+)(?:-(\\d+))?", Pattern.CASE_INSENSITIVE);
-                    m = p.matcher(request.headers.get("transport"));
+                    m = p.matcher(transport);
 
                     if (!m.find()) {
                         int[] ports = mSession.getTrack(trackId).getDestinationPorts();

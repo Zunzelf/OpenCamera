@@ -315,15 +315,20 @@ public class RtpSocket implements Runnable {
 		resetFifo();
 	}
 
+	private byte[] mTcpFrame = new byte[0];
+
+	/** One write per packet: '$', channel, length, RTP packet (RFC 2326 10.12). */
 	private void sendTCP() {
 		synchronized (mOutputStream) {
 			int len = mPackets[mBufferOut].getLength();
-			Log.d(TAG,"sent "+len);
-			mTcpHeader[2] = (byte) (len>>8);
-			mTcpHeader[3] = (byte) (len&0xFF);
+			if (mTcpFrame.length < len + 4) mTcpFrame = new byte[len + 4];
+			mTcpFrame[0] = '$';
+			mTcpFrame[1] = mTcpHeader[1];
+			mTcpFrame[2] = (byte) (len>>8);
+			mTcpFrame[3] = (byte) (len&0xFF);
+			System.arraycopy(mBuffers[mBufferOut], 0, mTcpFrame, 4, len);
 			try {
-				mOutputStream.write(mTcpHeader);
-				mOutputStream.write(mBuffers[mBufferOut], 0, len);
+				mOutputStream.write(mTcpFrame, 0, len + 4);
 			} catch (Exception e) {}
 		}
 	}

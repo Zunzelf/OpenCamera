@@ -187,6 +187,7 @@
     <ClInclude Include="VideoReceiver.hpp" />
     <ClInclude Include="..\shared\FrameShm.h" />
     <ClInclude Include="PhoneLink.hpp" />
+    <ClInclude Include="AdbBridge.hpp" />
     <ClInclude Include="Ui.hpp" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
@@ -198,6 +199,7 @@
     <ClCompile Include="..\external\ImGui\src\imgui_widgets.cpp" />
     <ClCompile Include="VideoReceiver.cpp" />
     <ClCompile Include="PhoneLink.cpp" />
+    <ClCompile Include="AdbBridge.cpp" />
     <ClCompile Include="Ui.cpp" />
     <ClCompile Include="UiPro.cpp" />
   </ItemGroup>

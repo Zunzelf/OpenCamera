@@ -12,8 +12,13 @@
 // Discovery (UDP 65501, new):
 //   phone broadcasts "OPENCAMERA?"; PC answers "OPENCAMERA1|<pc name>|65500".
 //   PC also broadcasts the same answer once a second.
+// USB cable (AdbBridge): adb reverse makes the PC reachable from the phone at
+//   127.0.0.1; the phone asks "OPENCAMERA?\n" on TCP 127.0.0.1:65501 and gets
+//   the same answer. Video then uses RTSP with RTP over TCP through adb forward.
 
 #include <WinSock2.h>
+
+#include "AdbBridge.hpp"
 
 #include <atomic>
 #include <set>
@@ -50,6 +55,8 @@ private:
 
 	SOCKET m_listen = INVALID_SOCKET;
 	SOCKET m_udp = INVALID_SOCKET;
+	SOCKET m_tcpProbe = INVALID_SOCKET; // 127.0.0.1:65501, answers phones on the USB cable
+	AdbBridge m_adb;
 	std::thread m_control;
 	std::thread m_discovery;
 	std::thread m_video;

@@ -23,6 +23,7 @@ public:
 	struct Options
 	{
 		bool gpuDecode = false;
+		bool tcp = false; // RTP inside the RTSP connection (USB cable via adb)
 		int openTimeoutMs = 8000;
 		int readTimeoutMs = 4000;
 	};

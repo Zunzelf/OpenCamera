@@ -102,8 +102,8 @@ bool VideoReceiver::open(const std::string& url, const Options& opt, const std::
 	m_fmt->interrupt_callback.opaque = this;
 
 	AVDictionary* o = nullptr;
-	// The phone's RTSP server (libstreaming) only offers RTP over UDP.
-	av_dict_set(&o, "rtsp_transport", "udp", 0);
+	// Wi-Fi: RTP over UDP. USB cable (adb carries TCP only): RTP inside the RTSP connection.
+	av_dict_set(&o, "rtsp_transport", opt.tcp ? "tcp" : "udp", 0);
 	// Bigger socket buffer: Wi-Fi delivers in bursts, the default drops packets.
 	av_dict_set(&o, "buffer_size", "2097152", 0);
 	// Wait at most 100 ms for re-ordered packets (default 500 ms adds lag).

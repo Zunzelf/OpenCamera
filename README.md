@@ -25,11 +25,15 @@ This is a reworked version of [OpenCamera](https://github.com/changliu98/OpenCam
   <img src="Assets/screens/pc-phone-card.png" width="300" alt="PC app showing the phone connected by USB cable">
 </p>
 
+## Download
+
+Get the latest PC app (`OpenCameraZ-…-windows-x64.zip`) and phone app (`OpenCameraZ-….apk`) from the [Releases page](https://github.com/Zunzelf/OpenCamera/releases).
+
 ## How to use it
 
 You need a Windows 10/11 PC (64-bit) and an Android phone (Android 5 or newer).
 
-1. Install and open OpenCamera on the PC. Click **Install virtual camera** once (Windows asks for permission).
+1. Unzip the PC app somewhere it can stay, run `OpenCameraZ.exe` and click **Install virtual camera** once (Windows asks for permission).
 2. Open the OpenCamera app on the phone.
 3. Connect them in one of these ways:
    - **Wi-Fi:** put both on the same Wi-Fi, then tap the PC's name in the phone app. A phone hotspot works too. If Windows Firewall asks, allow OpenCamera on private networks.

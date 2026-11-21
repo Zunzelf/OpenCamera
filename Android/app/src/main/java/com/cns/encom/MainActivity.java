@@ -9,6 +9,8 @@ import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
+import android.graphics.Matrix;
+import android.graphics.SurfaceTexture;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -19,7 +21,10 @@ import android.preference.PreferenceManager;
 import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.TextureView;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
@@ -27,14 +32,16 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.Switch;
 import android.widget.TextView;
 
 import net.majorkernelpanic.streaming.SessionBuilder;
-import net.majorkernelpanic.streaming.gl.SurfaceView;
 import net.majorkernelpanic.streaming.rtsp.RtspServer;
 
+import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
@@ -46,6 +53,7 @@ import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -60,6 +68,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * TCP hello on 65500 (protocol kept compatible with older PC versions) ->
  * the PC pulls H.264 video from the RTSP server on this phone.
  * The link is retried automatically until the user taps Disconnect.
+ *
+ * Newer PCs also talk back on the same socket (text lines): "HELLO 2",
+ * "SET key=value ..." (pro camera controls) and "POINT x y". Once a PC has
+ * said HELLO, the phone sends framed messages to it: 'M', int32 length,
+ * UTF-8 text ("CAPS ...", "STAT ...", "EVT ...").
  */
 public class MainActivity extends Activity {
 
@@ -77,7 +90,18 @@ public class MainActivity extends Activity {
     private ImageView statusDot;
     private LinearLayout pcList, pickPanel, livePanel, manualRow;
     private EditText address;
-    private Button grant;
+    private Button grant, torch;
+    private TextureView preview;
+    private TextView previewNote;
+    private View settingsPanel;
+    private LinearLayout settingsList;
+    private final CameraEngine camera = CameraEngine.INSTANCE;
+    private volatile String lastCaps;
+    private int frameW = 1280, frameH = 720;
+    private boolean frameFront;
+    private boolean cameraRunning;
+    private final Runnable dimNow = this::dimScreen;
+    private boolean dimmed;
 
     private LinkState state = LinkState.IDLE;
     private String connectedName = "";
@@ -140,6 +164,11 @@ public class MainActivity extends Activity {
         manualRow = findViewById(R.id.manual_row);
         address = findViewById(R.id.address);
         grant = findViewById(R.id.grant);
+        torch = findViewById(R.id.torch);
+        preview = findViewById(R.id.preview);
+        previewNote = findViewById(R.id.preview_note);
+        settingsPanel = findViewById(R.id.settings_panel);
+        settingsList = findViewById(R.id.settings_list);
 
         // Our own key: libstreaming owns "rtsp_port" and stores it as a String.
         rtspPort = prefs.getInt("ocam_rtsp_port", 0);
@@ -150,10 +179,11 @@ public class MainActivity extends Activity {
                 .putString(RtspServer.KEY_PORT, String.valueOf(rtspPort)).commit();
         address.setText(prefs.getString("last_host", ""));
 
-        SurfaceView preview = findViewById(R.id.preview);
+        camera.init(this);
+        applyPhoneSettings();
+        camera.setListener(cameraListener);
+        preview.setSurfaceTextureListener(previewListener);
         SessionBuilder.getInstance()
-                .setSurfaceView(preview)
-                .setPreviewOrientation(90)
                 .setContext(getApplicationContext())
                 .setAudioEncoder(SessionBuilder.AUDIO_NONE)
                 .setVideoEncoder(SessionBuilder.VIDEO_H264);
@@ -169,6 +199,14 @@ public class MainActivity extends Activity {
         });
         findViewById(R.id.disconnect).setOnClickListener(v -> disconnect());
         findViewById(R.id.flip).setOnClickListener(v -> { if (link != null) link.requestFlip(); });
+        torch.setOnClickListener(v -> {
+            boolean on = camera.toggleTorchLocal();
+            renderTorch();
+            Link l = link;
+            if (l != null) l.sendMessage("EVT torch=" + (on ? 1 : 0));
+        });
+        findViewById(R.id.settings).setOnClickListener(v -> showSettings(true));
+        findViewById(R.id.settings_link).setOnClickListener(v -> showSettings(true));
         grant.setOnClickListener(v -> askCameraPermission(true));
 
         bindService(new Intent(this, RtspServer.class), rtspConnection, Context.BIND_AUTO_CREATE);
@@ -191,7 +229,25 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    public void onBackPressed() {
+        if (settingsPanel.getVisibility() == View.VISIBLE) { showSettings(false); return; }
+        super.onBackPressed();
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (ev.getAction() == MotionEvent.ACTION_DOWN) {
+            boolean wasDimmed = dimmed;
+            undim();
+            if (wasDimmed) return true; // first tap only wakes the screen
+        }
+        return super.dispatchTouchEvent(ev);
+    }
+
+    @Override
     protected void onDestroy() {
+        ui.removeCallbacks(dimNow);
+        camera.clearListener(cameraListener);
         disconnect();
         if (rtspBound) {
             if (rtsp != null) rtsp.removeCallbackListener(rtspListener);
@@ -237,6 +293,7 @@ public class MainActivity extends Activity {
             default:           dot = R.color.muted;  chip = "Not connected"; break;
         }
         statusText.setText(chip);
+        scheduleDim();
         statusDot.setImageTintList(ColorStateList.valueOf(color(dot)));
 
         final boolean connected = s == LinkState.CONNECTING || s == LinkState.WAITING_PC || s == LinkState.LIVE || s == LinkState.RECONNECTING;
@@ -420,7 +477,12 @@ public class MainActivity extends Activity {
 
     private void startRtsp() {
         prefs.edit().putString(RtspServer.KEY_PORT, String.valueOf(rtspPort)).commit();
-        startService(new Intent(this, RtspServer.class));
+        try {
+            startService(new Intent(this, RtspServer.class));
+        } catch (IllegalStateException | SecurityException e) {
+            // Android 8+ refuses this while the app is in the background. The
+            // service still runs while bound (bindService in onCreate).
+        }
     }
 
     private void stopRtsp() {
@@ -434,12 +496,294 @@ public class MainActivity extends Activity {
         return n;
     }
 
+    // ------------------------------------------------------------ camera + preview
+    private final CameraEngine.Listener cameraListener = new CameraEngine.Listener() {
+        @Override public void onCaps(String caps) {
+            lastCaps = caps;
+            Link l = link;
+            if (l != null) l.sendMessage("CAPS " + caps);
+        }
+        @Override public void onStatus(String status) {
+            Link l = link;
+            if (l != null) l.sendMessage("STAT " + status);
+        }
+        @Override public void onPreviewGeometry(int w, int h, boolean front) {
+            ui.post(() -> { frameW = w; frameH = h; frameFront = front; fitPreview(); });
+        }
+        @Override public void onRunning(boolean running) {
+            ui.post(() -> { cameraRunning = running; renderPreviewNote(); renderTorch(); });
+        }
+    };
+
+    private final TextureView.SurfaceTextureListener previewListener = new TextureView.SurfaceTextureListener() {
+        @Override public void onSurfaceTextureAvailable(SurfaceTexture st, int w, int h) {
+            camera.setPreviewTexture(st);
+            fitPreview();
+        }
+        @Override public void onSurfaceTextureSizeChanged(SurfaceTexture st, int w, int h) { fitPreview(); }
+        @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture st) {
+            camera.setPreviewTexture(null); // waits until the camera stopped drawing into it
+            return true;
+        }
+        @Override public void onSurfaceTextureUpdated(SurfaceTexture st) { }
+    };
+
+    /** Fill the screen with the (portrait-turned) camera picture, cropping the edges. */
+    private void fitPreview() {
+        int vw = preview.getWidth(), vh = preview.getHeight();
+        if (vw == 0 || vh == 0 || frameW == 0 || frameH == 0) return;
+        float ar = frameH / (float) frameW; // width / height once shown upright in portrait
+        float hh = Math.max(vh, vw / ar), ww = ar * hh;
+        Matrix m = new Matrix();
+        m.setScale((frameFront ? -1f : 1f) * ww / vw, hh / vh, vw / 2f, vh / 2f); // selfie view is mirrored
+        preview.setTransform(m);
+    }
+
+    private void renderPreviewNote() {
+        boolean show = prefs.getBoolean("set_preview", true);
+        preview.setAlpha(show ? 1f : 0f);
+        previewNote.setVisibility(!show && cameraRunning ? View.VISIBLE : View.GONE);
+    }
+
+    private void renderTorch() {
+        boolean on = camera.torchOn();
+        torch.setText(on ? R.string.light_on : R.string.light_off);
+        torch.setBackgroundResource(on ? R.drawable.bg_primary : R.drawable.bg_secondary);
+        torch.setTextColor(color(on ? R.color.on_accent : R.color.text));
+    }
+
+    private void applyPhoneSettings() {
+        camera.showPreview = prefs.getBoolean("set_preview", true);
+        int br = prefs.getInt("set_bitrate", 1);
+        camera.bitrateScale = br == 0 ? 0.6f : br == 2 ? 1.6f : 1f;
+        camera.reportOrientation = prefs.getBoolean("set_orient", true);
+    }
+
+    // ------------------------------------------------------------ screen dimming
+    private void scheduleDim() {
+        ui.removeCallbacks(dimNow);
+        if (state == LinkState.LIVE && prefs.getBoolean("set_dim", false)) ui.postDelayed(dimNow, 20000);
+        else undim();
+    }
+
+    private void dimScreen() {
+        if (settingsPanel.getVisibility() == View.VISIBLE) return;
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.screenBrightness = 0.02f;
+        getWindow().setAttributes(lp);
+        dimmed = true;
+    }
+
+    private void undim() {
+        if (dimmed) {
+            WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+            getWindow().setAttributes(lp);
+            dimmed = false;
+        }
+        if (state == LinkState.LIVE && prefs.getBoolean("set_dim", false)) {
+            ui.removeCallbacks(dimNow);
+            ui.postDelayed(dimNow, 20000);
+        }
+    }
+
+    // ------------------------------------------------------------ settings screen
+    private void showSettings(boolean show) {
+        if (show) buildSettings();
+        settingsPanel.setVisibility(show ? View.VISIBLE : View.GONE);
+    }
+
+    private void buildSettings() {
+        LinearLayout list = settingsList;
+        list.removeAllViews();
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView t = new TextView(this);
+        t.setText(R.string.settings);
+        t.setTextColor(color(R.color.text));
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        t.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        head.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        TextView done = new TextView(this);
+        done.setText("Done");
+        done.setTextColor(color(R.color.accent));
+        done.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        done.setPadding(dp(16), dp(12), dp(4), dp(12));
+        done.setOnClickListener(v -> showSettings(false));
+        head.addView(done);
+        list.addView(head);
+
+        section(list, "VIDEO");
+        switchRow(list, "Show preview on this phone", "Turn off to save battery and keep the phone cooler. The PC still gets video.",
+                "set_preview", true, on -> { camera.setShowPreview(on); renderPreviewNote(); });
+        choiceRow(list, "Video data", "How much Wi-Fi the video uses. Higher looks sharper. Applies the next time video starts.",
+                new String[] { "Saver", "Standard", "High" }, "set_bitrate", 1, v -> applyPhoneSettings());
+        switchRow(list, "Tell the PC how the phone is held", "Lets the PC turn the picture upright automatically.",
+                "set_orient", true, on -> applyPhoneSettings());
+
+        section(list, "SCREEN");
+        switchRow(list, "Dim the screen while live", "Saves battery. Tap the screen to brighten it again.",
+                "set_dim", false, on -> scheduleDim());
+
+        section(list, "CONNECTION");
+        switchRow(list, "Reconnect automatically", "Connect to the last computer when the app opens.",
+                "auto_connect", true, on -> { });
+        String last = prefs.getString("last_host", "");
+        if (!last.isEmpty()) {
+            Button forget = new Button(this);
+            forget.setText("Forget " + last);
+            forget.setAllCaps(false);
+            forget.setTextColor(color(R.color.text));
+            forget.setBackgroundResource(R.drawable.bg_secondary);
+            forget.setStateListAnimator(null);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
+            lp.topMargin = dp(4);
+            forget.setOnClickListener(v -> {
+                prefs.edit().remove("last_host").apply();
+                address.setText("");
+                forget.setText("Forgotten");
+                forget.setEnabled(false);
+            });
+            list.addView(forget, lp);
+        }
+
+        section(list, "ABOUT");
+        infoRow(list, "This phone", phoneAddresses());
+        infoRow(list, "Camera", camera.supportSummary());
+        String version = "";
+        try { version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
+        infoRow(list, "App version", version);
+    }
+
+    private interface OnBool { void on(boolean v); }
+    private interface OnInt { void on(int v); }
+
+    private void section(LinearLayout list, String title) {
+        TextView s = new TextView(this);
+        s.setText(title);
+        s.setTextColor(color(R.color.muted));
+        s.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        s.setLetterSpacing(0.08f);
+        s.setPadding(dp(4), dp(24), 0, dp(8));
+        list.addView(s);
+    }
+
+    private LinearLayout card(LinearLayout list) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setBackgroundResource(R.drawable.bg_row);
+        c.setPadding(dp(16), dp(14), dp(16), dp(14));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = dp(8);
+        list.addView(c, lp);
+        return c;
+    }
+
+    private TextView label(String text, boolean title) {
+        TextView v = new TextView(this);
+        v.setText(text);
+        v.setTextColor(color(title ? R.color.text : R.color.muted));
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, title ? 16 : 13);
+        if (!title) v.setPadding(0, dp(3), 0, 0);
+        return v;
+    }
+
+    private void switchRow(LinearLayout list, String title, String hint, String key, boolean def, OnBool onChange) {
+        LinearLayout c = card(list);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        texts.addView(label(title, true));
+        texts.addView(label(hint, false));
+        row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Switch sw = new Switch(this);
+        sw.setChecked(prefs.getBoolean(key, def));
+        sw.setPadding(dp(12), 0, 0, 0);
+        sw.setContentDescription(title);
+        sw.setOnCheckedChangeListener((b, on) -> {
+            prefs.edit().putBoolean(key, on).apply();
+            onChange.on(on);
+        });
+        row.addView(sw);
+        c.addView(row);
+        c.setOnClickListener(v -> sw.toggle());
+    }
+
+    private void choiceRow(LinearLayout list, String title, String hint, String[] options, String key, int def, OnInt onChange) {
+        LinearLayout c = card(list);
+        c.addView(label(title, true));
+        c.addView(label(hint, false));
+        LinearLayout seg = new LinearLayout(this);
+        seg.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
+        slp.topMargin = dp(12);
+        c.addView(seg, slp);
+        final TextView[] items = new TextView[options.length];
+        final Runnable render = () -> {
+            int cur = prefs.getInt(key, def);
+            for (int i = 0; i < items.length; i++) {
+                boolean on = i == cur;
+                items[i].setBackgroundResource(on ? R.drawable.bg_primary : R.drawable.bg_secondary);
+                items[i].setTextColor(color(on ? R.color.on_accent : R.color.text));
+            }
+        };
+        for (int i = 0; i < options.length; i++) {
+            TextView o = new TextView(this);
+            o.setText(options[i]);
+            o.setGravity(Gravity.CENTER);
+            o.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+            o.setContentDescription(title + ": " + options[i]);
+            final int idx = i;
+            o.setOnClickListener(v -> {
+                prefs.edit().putInt(key, idx).apply();
+                render.run();
+                onChange.on(idx);
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1);
+            if (i > 0) lp.leftMargin = dp(6);
+            seg.addView(o, lp);
+            items[i] = o;
+        }
+        render.run();
+    }
+
+    private void infoRow(LinearLayout list, String title, String value) {
+        LinearLayout c = card(list);
+        c.addView(label(title, false));
+        TextView v = label(value == null || value.isEmpty() ? "-" : value, true);
+        v.setTextIsSelectable(true);
+        c.addView(v);
+    }
+
+    private static String phoneAddresses() {
+        StringBuilder sb = new StringBuilder();
+        try {
+            for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!ni.isUp() || ni.isLoopback()) continue;
+                for (InterfaceAddress ia : ni.getInterfaceAddresses()) {
+                    InetAddress a = ia.getAddress();
+                    if (a.getAddress().length != 4) continue;
+                    if (sb.length() > 0) sb.append('\n');
+                    sb.append(a.getHostAddress()).append("  (").append(ni.getName()).append(')');
+                }
+            }
+        } catch (Exception ignored) { }
+        return sb.toString();
+    }
+
     /** Keeps the control link to one PC alive, reconnecting until shutdown(). */
     private class Link extends Thread {
         private final String host;
         private final AtomicBoolean wanted = new AtomicBoolean(true);
         private final AtomicBoolean flip = new AtomicBoolean(false);
         private volatile Socket socket;
+        private volatile DataOutputStream out;
+        private volatile boolean pcTalksBack;
+        private final Object writeLock = new Object();
 
         Link(String host) {
             super("link");
@@ -447,6 +791,56 @@ public class MainActivity extends Activity {
         }
 
         void requestFlip() { flip.set(true); }
+
+        /** Framed text message to a PC that said HELLO; dropped otherwise. */
+        void sendMessage(String text) {
+            DataOutputStream o = out;
+            if (o == null || !pcTalksBack) return;
+            byte[] b = text.getBytes(StandardCharsets.UTF_8);
+            synchronized (writeLock) {
+                try {
+                    o.write('M');
+                    o.writeInt(b.length);
+                    o.write(b);
+                    o.flush();
+                } catch (IOException ignored) {
+                    // the heartbeat loop notices the broken socket
+                }
+            }
+        }
+
+        private void readLoop(Socket s) {
+            try {
+                BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
+                String line;
+                while (wanted.get() && (line = in.readLine()) != null) handleLine(line.trim());
+            } catch (IOException ignored) {
+            }
+        }
+
+        private void handleLine(String line) {
+            if (line.startsWith("HELLO")) {
+                pcTalksBack = true;
+                String caps = lastCaps;
+                if (caps != null) sendMessage("CAPS " + caps);
+            } else if (line.startsWith("SET ")) {
+                Map<String, String> m = new HashMap<>();
+                for (String kv : line.substring(4).split(" ")) {
+                    int eq = kv.indexOf('=');
+                    if (eq > 0) m.put(kv.substring(0, eq), kv.substring(eq + 1));
+                }
+                camera.applyFromPc(m);
+                ui.post(MainActivity.this::renderTorch);
+            } else if (line.startsWith("POINT")) {
+                String[] p = line.split(" ");
+                try {
+                    if (p.length >= 3) camera.setPoint(Float.parseFloat(p[1]), Float.parseFloat(p[2]));
+                    else camera.setPoint(-1, -1);
+                } catch (NumberFormatException e) {
+                    camera.setPoint(-1, -1);
+                }
+            }
+        }
 
         void shutdown() {
             wanted.set(false);
@@ -472,6 +866,11 @@ public class MainActivity extends Activity {
                     s.setTcpNoDelay(true);
                     startRtsp();
                     DataOutputStream out = new DataOutputStream(s.getOutputStream());
+                    this.out = out;
+                    pcTalksBack = false;
+                    Thread reader = new Thread(() -> readLoop(s), "link-read");
+                    reader.setDaemon(true);
+                    reader.start();
                     byte[] ip = s.getLocalAddress().getAddress();
                     for (int i = 0; i < 4; i++) out.writeInt(ip.length == 4 ? (ip[i] & 0xFF) : 0);
                     out.writeInt(rtspPort);
@@ -484,8 +883,10 @@ public class MainActivity extends Activity {
                     if (rtsp != null && rtsp.isStreaming()) post(LinkState.LIVE);
                     // Heartbeat twice a second; 'F' asks the PC to switch camera.
                     while (wanted.get()) {
-                        out.write(flip.getAndSet(false) ? 'F' : 1);
-                        out.flush();
+                        synchronized (writeLock) {
+                            out.write(flip.getAndSet(false) ? 'F' : 1);
+                            out.flush();
+                        }
                         Thread.sleep(500);
                     }
                 } catch (IOException e) {
@@ -496,6 +897,8 @@ public class MainActivity extends Activity {
                     Socket s = socket;
                     if (s != null) try { s.close(); } catch (IOException ignored) { }
                     socket = null;
+                    out = null;
+                    pcTalksBack = false;
                 }
                 if (!wanted.get()) break;
                 stopRtsp();

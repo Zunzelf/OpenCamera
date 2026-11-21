@@ -280,7 +280,12 @@ public abstract class VideoStream extends MediaStream {
 
 	/** Stops the stream. */
 	public synchronized void stop() {
-		if (mCamera != null) {
+		if (mCamera == null) {
+			// No Camera1 in use (e.g. Camera2H264Stream): just stop the encoder.
+			super.stop();
+			return;
+		}
+		{
 			if (mMode == MODE_MEDIACODEC_API) {
 				mCamera.setPreviewCallbackWithBuffer(null);
 			}

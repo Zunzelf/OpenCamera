@@ -59,6 +59,19 @@ A dark, modern single window: a **live preview** with a stats chip (resolution, 
 - No AndroidX: framework widgets only, 1 MB APK. libstreaming is compiled into the app as source (one module).
 - Build: AGP 9.5.1, Gradle 9.9, compileSdk/targetSdk 36, minSdk 21. The RTSP port is a stable 20000–29999 and moves if it's taken.
 
+### Pro camera controls (3.1)
+Camera-style manual controls on the PC, sent to the phone over the existing control connection (port 65500, text lines; old apps ignore them).
+
+- **Phone camera engine** (`CameraEngine.java`, `Camera2H264Stream.java`): Camera2 renders straight into the encoder surface (and a preview on the phone). It reports what the camera can do (ISO and shutter range, EV, zoom, manual focus, OIS/EIS, frame rates per size) and a status every second (live ISO/shutter/focus, battery, temperature, how the phone is held).
+- **Pro strip under the PC preview**: ISO, SHUTTER, EV, WB, FOCUS, ZOOM, AE-L, LIGHT, MORE. Each tile opens a small panel: ISO and shutter stops, EV slider, white balance presets plus a Kelvin slider (2300-10000 K, from the sensor's colour calibration), AF-C/MF with a near/far slider and AF-L, zoom slider, OIS/EIS and anti-flicker. Auto tiles show the live value the phone picked; manual ones turn amber. Setting only ISO or only shutter gives a semi-auto mode, where the PC keeps the exposure right with the other one.
+- **Click the picture to focus and meter there**; right-click clears it.
+- **Monitoring aids** (toggles on the preview): grid, histogram, zebra (clipped highlights), focus peaking, and a level line.
+- **Rotation**: "Rotate" steps 0/90/180/270, "Auto" follows how the phone is held, "Fill 16:9" crops a portrait picture to fill the frame instead of letterboxing. Rotation costs about 3 ms per 1080p frame on the PC.
+- **Frame rate**: picks from the rates the phone supports at the chosen size; the bitrate scales with it.
+- **Phone settings screen**: show/hide preview (saves battery and heat), video data Saver/Standard/High, tell the PC how the phone is held, dim the screen while live, reconnect automatically, forget the saved PC, and an About section with what the camera supports.
+- The PC warns when the phone is warm (42 °C or more) or the battery is low.
+- All of these settings are remembered in `%APPDATA%\OpenCamera\settings.ini`.
+
 ## What was verified, and what wasn't
 
 | Item | Status |
@@ -68,12 +81,17 @@ A dark, modern single window: a **live preview** with a stats chip (resolution, 
 | Decoder → shared memory → reader, with your FFmpeg 8: 720p/1080p, CPU and GPU, limited and full range, 1440p downscale; checks colour and orientation of every frame | **Tested, all pass** (`Windows/tests`) |
 | Lock-free buffer under stress (writer at about 700 fps, 3 readers, about 19k reads) | **Tested, 0 torn frames** |
 | Phone link with a fake phone on loopback: discovery reply, name, approval, camera switch from the phone, 6 s watchdog, old-app protocol, disconnect | **Tested, all pass** |
+| Phone app on POCO X3 Pro (Android 13), Camera2 path, 720p | **Tested live:** 27-30 fps, preview upright, settings screen shows |
+| Pro controls end to end: ISO 200, 1/50 s, 3200 K, 2x zoom applied on the phone; semi-auto (fixed shutter, auto ISO) exposes well; live ISO/shutter/focus/battery/temperature readouts | **Tested live** |
+| Rotation 90 deg, grid, histogram, zebra, peaking overlays | **Tested live** |
+| Virtual camera registered and captured from FFmpeg (dshow) | **Tested** |
+| Pro tile popups, click-to-focus, level line (phone was lying flat), Fill crop in the virtual camera, 60 fps | **Not tested** (popups need a real mouse on the window; the phone only offered 30 fps at 720p) |
 | PC window look and behaviour | **Not run.** `EncomService.exe` contains the repo's prebuilt FFmpeg/SDL2 binaries, which I didn't execute without your OK |
 | Virtual camera in Zoom/Chrome/OBS | **Not tested.** It needs registering (`regsvr32`, admin, a system change) |
 | Phone app on a real phone, end-to-end latency | **Not tested.** It needs the APK installed on your phone |
 | Old upstream phone app against the new PC app | Protocol checked with the fake phone only |
 
-Known limits / follow-ups: RTP is still UDP-only (libstreaming's RTSP server doesn't do TCP interleaving). It still uses the Camera1 API. The phone app must stay in the foreground (Android blocks background camera use). There's no QR pairing yet; discovery covers that need on a normal LAN.
+Known limits / follow-ups: RTP is still UDP-only (libstreaming's RTSP server doesn't do TCP interleaving). The phone app now uses Camera2 (libstreaming's Camera1 path stays as a fallback). The phone app must stay in the foreground (Android blocks background camera use). There's no QR pairing yet; discovery covers that need on a normal LAN.
 
 ## Building
 

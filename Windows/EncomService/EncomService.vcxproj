@@ -199,6 +199,7 @@
     <ClCompile Include="VideoReceiver.cpp" />
     <ClCompile Include="PhoneLink.cpp" />
     <ClCompile Include="Ui.cpp" />
+    <ClCompile Include="UiPro.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="EncomService.rc" />

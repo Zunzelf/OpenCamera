@@ -11,26 +11,7 @@
 
 #include <cmath>
 
-// ------------------------------------------------------------------ palette
-namespace col
-{
-static const ImVec4 bg(0.067f, 0.075f, 0.090f, 1.0f);        // #111317
-static const ImVec4 panel(0.102f, 0.114f, 0.137f, 1.0f);     // #1A1D23
-static const ImVec4 panel2(0.133f, 0.149f, 0.180f, 1.0f);    // #22262E
-static const ImVec4 border(0.165f, 0.184f, 0.220f, 1.0f);    // #2A2F38
-static const ImVec4 text(0.925f, 0.933f, 0.949f, 1.0f);      // #ECEEF2
-static const ImVec4 muted(0.588f, 0.612f, 0.659f, 1.0f);     // #969CA8
-static const ImVec4 accent(0.369f, 0.627f, 1.0f, 1.0f);      // #5EA0FF
-static const ImVec4 accentHi(0.475f, 0.698f, 1.0f, 1.0f);
-static const ImVec4 good(0.239f, 0.839f, 0.549f, 1.0f);      // #3DD68C
-static const ImVec4 warn(0.961f, 0.722f, 0.294f, 1.0f);      // #F5B84B
-static const ImVec4 bad(0.941f, 0.380f, 0.427f, 1.0f);       // #F0616D
-}
-
-static ImU32 U32(const ImVec4& c, float a = 1.0f)
-{
-	return ImGui::GetColorU32(ImVec4(c.x, c.y, c.z, c.w * a));
-}
+#include "UiTheme.hpp"
 
 // Virtual camera CLSID (see EncomCamera/Dll.cpp)
 static const char* kVcamKey = "CLSID\\{8E14549A-DB61-4309-AFA1-3578E927E933}\\InprocServer32";
@@ -95,6 +76,12 @@ bool Ui::init()
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glGenTextures(1, &m_ovTex);
+	glBindTexture(GL_TEXTURE_2D, m_ovTex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
 	m_pcName = PhoneLink::computerName();
 	refreshEnvironment(true);
@@ -104,7 +91,8 @@ bool Ui::init()
 void Ui::shutdown()
 {
 	if (m_tex) glDeleteTextures(1, &m_tex);
-	m_tex = 0;
+	if (m_ovTex) glDeleteTextures(1, &m_ovTex);
+	m_tex = m_ovTex = 0;
 	if (ImGui::GetCurrentContext())
 	{
 		ImGui_ImplOpenGL3_Shutdown();
@@ -153,12 +141,15 @@ void Ui::setupStyle()
 	c[ImGuiCol_ScrollbarGrab] = col::border;
 	c[ImGuiCol_ModalWindowDimBg] = ImVec4(0, 0, 0, 0.55f);
 	c[ImGuiCol_Separator] = col::border;
+	c[ImGuiCol_SliderGrab] = col::accent;
+	c[ImGuiCol_SliderGrabActive] = col::accentHi;
+	s.GrabMinSize = px(14);
 }
 
 bool Ui::loadFonts()
 {
 	ImGuiIO& io = ImGui::GetIO();
-	static const ImWchar ranges[] = { 0x0020, 0x00FF, 0x2013, 0x2026, 0x2190, 0x2193, 0 };
+	static const ImWchar ranges[] = { 0x0020, 0x00FF, 0x2013, 0x2026, 0x2190, 0x2193, 0x221E, 0x221E, 0 };
 	const char* regular = "C:\\Windows\\Fonts\\segoeui.ttf";
 	const char* semibold = "C:\\Windows\\Fonts\\seguisb.ttf";
 	ImFontConfig cfg;
@@ -254,7 +245,7 @@ void Ui::updatePreviewTexture()
 	if (counter == m_texCounter && m_texValid) return;
 	glBindTexture(GL_TEXTURE_2D, m_tex);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 4); // DIB rows are DWORD aligned
-	const bool ok = m_preview.readLatest([&](const uint8_t* data, uint32_t w, uint32_t h, uint32_t) {
+	const bool ok = m_preview.readLatest([&](const uint8_t* data, uint32_t w, uint32_t h, uint32_t stride) {
 		if ((int)w != m_texW || (int)h != m_texH)
 		{
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0, GL_BGR, GL_UNSIGNED_BYTE, data);
@@ -265,6 +256,7 @@ void Ui::updatePreviewTexture()
 		{
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_BGR, GL_UNSIGNED_BYTE, data);
 		}
+		updateOverlay(data, (int)w, (int)h, (int)stride);
 	});
 	if (ok)
 	{
@@ -453,6 +445,7 @@ void Ui::frame()
 	ImGui::SameLine(0, gap);
 	drawSidebar(ImVec2(sideW, avail.y));
 
+	drawProPopup();
 	drawApproval();
 	drawActivity();
 
@@ -492,12 +485,17 @@ void Ui::drawHeader()
 
 void Ui::drawPreview(const ImVec2& size)
 {
-	ImGui::BeginChild("##preview", size, false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+	const bool live = m_texValid && g_app.phase.load() == Phase::Live;
+	const float stripH = live ? px(74) : 0.0f;
+	const float gap = live ? px(12) : 0.0f;
+	const ImVec2 top = ImGui::GetCursorScreenPos();
+	ImGui::BeginGroup();
+	ImGui::BeginChild("##preview", ImVec2(size.x, size.y - stripH - gap), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 	const ImVec2 origin = ImGui::GetCursorScreenPos();
 	const ImVec2 inner = ImGui::GetContentRegionAvail();
 	ImDrawList* dl = ImGui::GetWindowDrawList();
 
-	if (m_texValid && g_app.phase.load() == Phase::Live)
+	if (live)
 	{
 		const ImVec2 wp = ImGui::GetWindowPos();
 		const ImVec2 ws = ImGui::GetWindowSize();
@@ -506,10 +504,12 @@ void Ui::drawPreview(const ImVec2& size)
 		float w = ws.x, h = ws.x * m_texH / (float)m_texW;
 		if (h > ws.y) { h = ws.y; w = ws.y * m_texW / (float)m_texH; }
 		const ImVec2 a(wp.x + (ws.x - w) * 0.5f, wp.y + (ws.y - h) * 0.5f);
+		const ImVec2 b(a.x + w, a.y + h);
 		const bool mirror = g_app.mirror;
 		// texture rows are bottom-up: flip V
 		const ImVec2 uv0(mirror ? 1.f : 0.f, 1.f), uv1(mirror ? 0.f : 1.f, 0.f);
-		dl->AddImageRounded((ImTextureID)(intptr_t)m_tex, a, ImVec2(a.x + w, a.y + h), uv0, uv1, IM_COL32_WHITE, px(12));
+		dl->AddImageRounded((ImTextureID)(intptr_t)m_tex, a, b, uv0, uv1, IM_COL32_WHITE, px(12));
+		drawOverlays(a, b, mirror);
 
 		// stats chip
 		char buf[160];
@@ -521,12 +521,24 @@ void Ui::drawPreview(const ImVec2& size)
 		dl->AddRectFilled(cp, ImVec2(cp.x + ts.x + px(20), cp.y + ts.y + px(12)), IM_COL32(0, 0, 0, 150), px(8));
 		dl->AddText(ImVec2(cp.x + px(10), cp.y + px(6)), IM_COL32(255, 255, 255, 230), buf);
 		ImGui::PopFont();
+
+		// Buttons first, so they win over the click-to-focus area below them.
+		drawPreviewTools(wp, ImVec2(wp.x + ws.x, wp.y + ws.y));
+		handlePreviewClick(a, b, mirror);
 	}
 	else
 	{
 		drawOnboarding(origin, inner);
 	}
 	ImGui::EndChild();
+	if (live)
+	{
+		ImGui::SetCursorScreenPos(ImVec2(top.x, top.y + size.y - stripH));
+		drawProStrip(ImGui::GetCursorScreenPos(), ImVec2(size.x, stripH));
+		ImGui::SetCursorScreenPos(ImVec2(top.x, top.y + size.y - stripH));
+		ImGui::Dummy(ImVec2(size.x, stripH));
+	}
+	ImGui::EndGroup();
 }
 
 void Ui::drawOnboarding(const ImVec2& origin, const ImVec2& size)
@@ -670,13 +682,32 @@ void Ui::drawSidebar(const ImVec2& size)
 	// Phone
 	std::string name, addr;
 	g_app.getPhone(name, addr);
-	card("##phone", connected ? px(122) : px(78), [&]() {
+	const PhoneStatus pst = g_app.getStatus();
+	const bool showBattery = connected && pst.valid && pst.battery >= 0;
+	const bool phoneHot = showBattery && pst.temperature >= 42;
+	card("##phone", connected ? (showBattery ? (phoneHot ? px(164) : px(146)) : px(122)) : px(78), [&]() {
 		section("PHONE");
 		if (connected)
 		{
 			ImGui::TextUnformatted(name.empty() ? "Phone" : name.c_str());
 			ImGui::SameLine();
 			ImGui::TextColored(col::muted, "%s", addr.c_str());
+			if (showBattery)
+			{
+				ImGui::PushFont(m_fontSmall);
+				const bool hot = pst.temperature >= 42;
+				const bool low = pst.battery <= 15 && !pst.charging;
+				if (hot)
+				{
+					ImGui::PushTextWrapPos(0);
+					ImGui::TextColored(col::warn, "Phone is warm (%d" U8_DEG "C). Lower the quality or turn off its preview.", pst.temperature);
+					ImGui::PopTextWrapPos();
+				}
+				else
+					ImGui::TextColored(low ? col::warn : col::muted, "Battery %d%%%s   " U8_DOT "   %d" U8_DEG "C",
+						pst.battery, pst.charging ? " (charging)" : "", pst.temperature);
+				ImGui::PopFont();
+			}
 			if (primaryButton("Disconnect", ImVec2(ImGui::GetContentRegionAvail().x, px(34)), U32(col::bad, 0.9f)))
 				g_app.requestDisconnect = true;
 		}
@@ -688,7 +719,7 @@ void Ui::drawSidebar(const ImVec2& size)
 	ImGui::Dummy(ImVec2(0, px(2)));
 
 	// Camera and quality
-	card("##camera", px(186), [&]() {
+	card("##camera", px(254), [&]() {
 		section("CAMERA");
 		static const char* cams[] = { "Front", "Back" };
 		int cam = g_app.frontCamera ? 0 : 1;
@@ -705,6 +736,32 @@ void Ui::drawSidebar(const ImVec2& size)
 		if (segmented("quality", q, kQualityPresetCount, &qi))
 		{
 			g_app.quality = qi;
+			g_app.requestRestartVideo = true;
+			g_app.saveSettings();
+		}
+		section("FRAME RATE");
+		// Rates the phone offers at this size (from the phone), else common ones.
+		std::vector<int> rates;
+		const PhoneCaps caps = g_app.getCaps();
+		const int height = kQualityPresets[g_app.quality.load()].height;
+		for (const auto& row : caps.fps)
+			if (row.first == height)
+				for (int r : row.second)
+					if (r == 24 || r == 25 || r == 30 || r == 48 || r == 50 || r == 60) rates.push_back(r);
+		if (rates.empty()) rates = { 24, 30, 60 };
+		std::vector<std::string> labels;
+		std::vector<const char*> ptrs;
+		int sel = -1;
+		for (size_t i = 0; i < rates.size(); i++)
+		{
+			labels.push_back(std::to_string(rates[i]));
+			if (rates[i] == g_app.frameRate.load()) sel = (int)i;
+		}
+		for (const auto& l : labels) ptrs.push_back(l.c_str());
+		int fi = sel;
+		if (segmented("fps", ptrs.data(), (int)ptrs.size(), &fi) && fi >= 0)
+		{
+			g_app.frameRate = rates[fi];
 			g_app.requestRestartVideo = true;
 			g_app.saveSettings();
 		}
@@ -732,7 +789,7 @@ void Ui::drawSidebar(const ImVec2& size)
 	ImGui::Dummy(ImVec2(0, px(2)));
 
 	// Virtual camera install state
-	card("##vcam", std::max(px(110), std::min(ImGui::GetContentRegionAvail().y, px(132))), [&]() {
+	card("##vcam", m_vcamInstalled ? px(84) : std::max(px(110), std::min(ImGui::GetContentRegionAvail().y, px(132))), [&]() {
 		section("VIRTUAL CAMERA");
 		ImGui::PushFont(m_fontSmall);
 		ImGui::PushTextWrapPos(0);

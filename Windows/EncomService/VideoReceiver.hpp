@@ -40,6 +40,18 @@ public:
 	// -1 on end of stream / error (see lastError()).
 	int step(ocam::FrameWriter& out);
 
+	// Turn the picture clockwise by 0/90/180/270 degrees. With `fill`, a
+	// picture that ends up taller than 16:9 is cropped to 16:9 instead of
+	// getting black bars in video apps. Takes effect on the next frame.
+	void setTransform(int rotation, bool fill) { m_rot = rotation; m_fill = fill; }
+	int appliedRotation() const { return m_appliedRot; }
+	float cropTop() const { return m_cropTop; }
+	float cropHeight() const { return m_cropHeight; }
+	// Brightness of the last frame (before rotation): 64-bin histogram of
+	// luma, normalised so the tallest bin is 1, and the mean 0..255.
+	const float* histogram() const { return m_hist; }
+	float meanLuma() const { return m_meanLuma; }
+
 	bool hwActive() const { return m_hwActive; }
 	int width() const { return m_width; }
 	int height() const { return m_height; }
@@ -53,6 +65,8 @@ public:
 private:
 	bool openDecoder(bool tryGpu);
 	bool publish(AVFrame* frame, ocam::FrameWriter& out);
+	AVFrame* rotate(AVFrame* src, int rot);
+	void measureLuma(const AVFrame* src);
 
 	AVFormatContext* m_fmt = nullptr;
 	AVCodecContext* m_dec = nullptr;
@@ -60,6 +74,13 @@ private:
 	AVFrame* m_frame = nullptr;
 	AVFrame* m_latest = nullptr;
 	AVFrame* m_swFrame = nullptr;
+	AVFrame* m_rotFrame = nullptr;
+	std::atomic<int> m_rot{ 0 };
+	std::atomic<bool> m_fill{ false };
+	int m_appliedRot = 0;
+	float m_cropTop = 0, m_cropHeight = 1;
+	float m_hist[64] = {};
+	float m_meanLuma = 0;
 	AVPacket* m_pkt = nullptr;
 	SwsContext* m_sws = nullptr;
 	int m_swsKey[6] = { 0, 0, -1, 0, 0, 0 };

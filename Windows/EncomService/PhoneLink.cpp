@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <sstream>
 
 #pragma comment(lib, "iphlpapi.lib")
@@ -69,6 +71,139 @@ static bool RecvInt(SOCKET s, int32_t& v, int timeoutMs, const std::atomic<bool>
 	if (!RecvExact(s, (char*)&be, 4, timeoutMs, running)) return false;
 	v = (int32_t)ntohl(be);
 	return true;
+}
+
+static bool SendAll(SOCKET s, const std::string& data)
+{
+	const char* p = data.data();
+	int left = (int)data.size();
+	while (left > 0)
+	{
+		const int n = send(s, p, left, 0);
+		if (n <= 0) return false;
+		p += n;
+		left -= n;
+	}
+	return true;
+}
+
+// "key=value key=value" -> map
+static std::map<std::string, std::string> ParseKv(const std::string& text)
+{
+	std::map<std::string, std::string> m;
+	std::istringstream in(text);
+	std::string tok;
+	while (in >> tok)
+	{
+		const size_t eq = tok.find('=');
+		if (eq != std::string::npos && eq > 0) m[tok.substr(0, eq)] = tok.substr(eq + 1);
+	}
+	return m;
+}
+
+static int KvInt(const std::map<std::string, std::string>& m, const char* k, int def)
+{
+	auto it = m.find(k);
+	return it == m.end() ? def : atoi(it->second.c_str());
+}
+
+static int64_t KvInt64(const std::map<std::string, std::string>& m, const char* k, int64_t def)
+{
+	auto it = m.find(k);
+	return it == m.end() ? def : _atoi64(it->second.c_str());
+}
+
+static float KvFloat(const std::map<std::string, std::string>& m, const char* k, float def)
+{
+	auto it = m.find(k);
+	return it == m.end() ? def : (float)atof(it->second.c_str());
+}
+
+// "a<sep>b" -> two numbers
+template <typename T>
+static bool KvPair(const std::map<std::string, std::string>& m, const char* k, char sep, T& a, T& b)
+{
+	auto it = m.find(k);
+	if (it == m.end()) return false;
+	const size_t pos = it->second.find(sep, 1); // skip a leading minus sign
+	if (pos == std::string::npos) return false;
+	a = (T)atof(it->second.substr(0, pos).c_str());
+	b = (T)atof(it->second.substr(pos + 1).c_str());
+	return true;
+}
+
+static PhoneCaps ParseCaps(const std::string& text)
+{
+	const auto m = ParseKv(text);
+	PhoneCaps c;
+	c.valid = true;
+	c.front = KvInt(m, "front", 0) != 0;
+	c.manual = KvInt(m, "manual", 0) != 0;
+	c.kelvin = KvInt(m, "wbk", 0) != 0;
+	c.torch = KvInt(m, "torch", 0) != 0;
+	c.ois = KvInt(m, "ois", 0) != 0;
+	c.eis = KvInt(m, "eis", 0) != 0;
+	c.point = KvInt(m, "point", 0) != 0;
+	KvPair(m, "iso", '-', c.isoMin, c.isoMax);
+	double e0 = 0, e1 = 0;
+	if (KvPair(m, "exp", '-', e0, e1)) { c.expMin = (int64_t)e0; c.expMax = (int64_t)e1; }
+	KvPair(m, "ev", ',', c.evMin, c.evMax);
+	c.evStep = KvFloat(m, "evstep", 1.0f / 3.0f);
+	c.minFocus = KvFloat(m, "mf", 0);
+	KvPair(m, "zoom", ',', c.zoomMin, c.zoomMax);
+	auto it = m.find("fps");
+	if (it != m.end())
+	{
+		std::istringstream sizes(it->second);
+		std::string entry;
+		while (std::getline(sizes, entry, ';'))
+		{
+			const size_t colon = entry.find(':');
+			if (colon == std::string::npos) continue;
+			std::pair<int, std::vector<int>> row;
+			row.first = atoi(entry.substr(0, colon).c_str());
+			std::istringstream rates(entry.substr(colon + 1));
+			std::string r;
+			while (std::getline(rates, r, ','))
+				if (!r.empty()) row.second.push_back(atoi(r.c_str()));
+			c.fps.push_back(row);
+		}
+	}
+	return c;
+}
+
+static PhoneStatus ParseStatus(const std::string& text)
+{
+	const auto m = ParseKv(text);
+	PhoneStatus st;
+	st.valid = true;
+	st.iso = KvInt(m, "iso", 0);
+	st.expNs = KvInt64(m, "exp", 0);
+	st.focus = KvFloat(m, "fd", -1);
+	st.afState = KvInt(m, "af", -1);
+	st.aeState = KvInt(m, "ae", -1);
+	st.torch = KvInt(m, "torch", 0) != 0;
+	st.battery = KvInt(m, "bat", -1);
+	st.temperature = KvInt(m, "temp", -1);
+	st.charging = KvInt(m, "chg", 0) != 0;
+	st.rotation = KvInt(m, "rot", -1);
+	st.level = KvInt(m, "level", 0);
+	return st;
+}
+
+// The settings line sent to the phone. iso/exp may be overridden by the
+// PC's own auto-exposure helper (see serveSession).
+static std::string ProLine(const ProSettings& p, int iso, int64_t expNs)
+{
+	static const char* wb[] = { "auto", "daylight", "cloudy", "shade", "tungsten", "fluorescent", "k" };
+	static const char* flicker[] = { "auto", "50", "60", "off" };
+	char buf[512];
+	snprintf(buf, sizeof(buf),
+		"SET iso=%d exp=%lld ev=%d wb=%s k=%d af=%s fd=%.3f ael=%d awbl=%d afl=%d zoom=%.2f torch=%d ois=%d eis=%d flicker=%s\n",
+		iso, (long long)expNs, p.ev, wb[std::min(std::max(p.wb, 0), 6)], p.kelvin, p.manualFocus ? "m" : "c", p.focus,
+		p.aeLock ? 1 : 0, p.awbLock ? 1 : 0, p.afLock ? 1 : 0, p.zoom, p.torch ? 1 : 0, p.ois ? 1 : 0, p.eis ? 1 : 0,
+		flicker[std::min(std::max(p.flicker, 0), 3)]);
+	return buf;
 }
 
 PhoneLink::PhoneLink()
@@ -381,8 +516,66 @@ void PhoneLink::serveSession(SOCKET s, const std::string& host, int rtspPort)
 	g_app.setMessage("Starting video...", "");
 	m_video = std::thread(&PhoneLink::videoLoop, this, host, rtspPort);
 
+	g_app.clearPhoneInfo();
+	g_app.phoneTalksBack = false;
+	// Phones with pro controls answer this; older phone apps never read it.
+	SendAll(s, "HELLO 2\n");
+	g_app.proDirty = true;
+	g_app.pointDirty = false;
+
+	// PC-side auto exposure for "shutter manual + ISO auto" (and the reverse):
+	// the phone can only do fully auto or fully manual, so the PC nudges the
+	// auto value from the picture's brightness 4 times a second.
+	int semiIso = 0;
+	int64_t semiExp = 0;
+	int sentIso = -1;
+	int64_t sentExp = -1;
+	auto lastAe = std::chrono::steady_clock::now();
+	bool loggedPro = false;
+
+	auto sendPro = [&]() {
+		const ProSettings p = g_app.getPro();
+		int iso = p.iso;
+		int64_t exp = p.expNs;
+		if (p.iso == 0 && p.expNs > 0) iso = semiIso;
+		if (p.expNs == 0 && p.iso > 0) exp = semiExp;
+		sentIso = iso;
+		sentExp = exp;
+		return SendAll(s, ProLine(p, iso, exp));
+	};
+
+	auto handleMessage = [&](const std::string& msg) {
+		if (msg.rfind("CAPS ", 0) == 0)
+		{
+			g_app.setCaps(ParseCaps(msg.substr(5)));
+			g_app.phoneTalksBack = true;
+			if (!loggedPro)
+			{
+				loggedPro = true;
+				const PhoneCaps c = g_app.getCaps();
+				g_app.log(LogLevel::Info, std::string("Pro controls ready (") + (c.manual ? "manual ISO and shutter" : "automatic exposure only") +
+					(c.kelvin ? ", Kelvin white balance" : "") + ").");
+			}
+		}
+		else if (msg.rfind("STAT ", 0) == 0)
+		{
+			g_app.setStatus(ParseStatus(msg.substr(5)));
+		}
+		else if (msg.rfind("EVT ", 0) == 0)
+		{
+			const auto m = ParseKv(msg.substr(4));
+			if (m.count("torch"))
+			{
+				ProSettings p = g_app.getPro();
+				p.torch = KvInt(m, "torch", 0) != 0;
+				g_app.setPro(p, false);
+			}
+		}
+	};
+
 	auto lastHeard = std::chrono::steady_clock::now();
 	std::string why;
+	std::string inbuf;
 	while (m_running)
 	{
 		g_frames.heartbeat();
@@ -391,7 +584,62 @@ void PhoneLink::serveSession(SOCKET s, const std::string& host, int rtspPort)
 			why = "You disconnected the phone.";
 			break;
 		}
-		const int w = WaitReadable(s, 200);
+		if (g_app.proDirty.exchange(false) && !sendPro())
+		{
+			why = "The connection to the phone broke.";
+			break;
+		}
+		if (g_app.pointDirty.exchange(false))
+		{
+			float x, y;
+			g_app.getPoint(x, y);
+			char buf[64];
+			if (x < 0) snprintf(buf, sizeof(buf), "POINT none\n");
+			else snprintf(buf, sizeof(buf), "POINT %.4f %.4f\n", x, y);
+			SendAll(s, buf);
+		}
+
+		const auto now = std::chrono::steady_clock::now();
+		if (now - lastAe >= std::chrono::milliseconds(250))
+		{
+			lastAe = now;
+			const ProSettings p = g_app.getPro();
+			const PhoneCaps c = g_app.getCaps();
+			const bool isoAuto = p.iso == 0, expAuto = p.expNs == 0;
+			if (c.valid && c.manual && isoAuto != expAuto && g_app.phase.load() == Phase::Live)
+			{
+				const PhoneStatus st = g_app.getStatus();
+				const int fps = std::max(1, g_app.frameRate.load());
+				if (semiIso <= 0) semiIso = st.iso > 0 ? st.iso : 400;
+				if (semiExp <= 0) semiExp = st.expNs > 0 ? st.expNs : 1000000000LL / (2 * fps);
+				const float mean = g_app.getLuma(nullptr);
+				if (mean > 1.0f)
+				{
+					const float target = std::min(225.0f, std::max(25.0f, 118.0f * powf(2.0f, p.ev * c.evStep * 0.45f)));
+					const float ratio = target / mean;
+					if (fabsf(ratio - 1.0f) > 0.05f)
+					{
+						// Picture values are gamma-encoded (~2.2): exposure ~ ratio^2.2,
+						// taken half-way per step so it settles without pumping.
+						const float change = std::min(1.45f, std::max(0.7f, powf(ratio, 1.1f)));
+						if (isoAuto)
+							semiIso = std::min(c.isoMax, std::max(c.isoMin, (int)(semiIso * change)));
+						else
+							semiExp = std::min(std::min(c.expMax, 1000000000LL / fps), std::max(c.expMin, (int64_t)(semiExp * change)));
+						const bool moved = isoAuto ? std::abs(semiIso - sentIso) > sentIso * 0.03
+						                           : std::llabs(semiExp - sentExp) > sentExp * 0.03;
+						if (moved) sendPro();
+					}
+				}
+			}
+			else
+			{
+				semiIso = 0;
+				semiExp = 0;
+			}
+		}
+
+		const int w = WaitReadable(s, 100);
 		if (w < 0)
 		{
 			why = "The connection to the phone broke.";
@@ -399,7 +647,7 @@ void PhoneLink::serveSession(SOCKET s, const std::string& host, int rtspPort)
 		}
 		if (w > 0)
 		{
-			char tmp[256];
+			char tmp[4096];
 			const int r = recv(s, tmp, sizeof(tmp), 0);
 			if (r <= 0)
 			{
@@ -407,15 +655,38 @@ void PhoneLink::serveSession(SOCKET s, const std::string& host, int rtspPort)
 				break;
 			}
 			lastHeard = std::chrono::steady_clock::now();
-			// New phone app: 'F' = user tapped "Switch camera" on the phone.
-			// Heartbeats are 0x01 (new app) or 0x00 0x01 (old app).
-			if (memchr(tmp, 'F', (size_t)r))
+			inbuf.append(tmp, (size_t)r);
+			// Stream from the phone: heartbeats (0x01; old app 0x00 0x01),
+			// 'F' = "Switch camera" tapped on the phone, and framed messages
+			// 'M' + int32 length + text (phones with pro controls).
+			size_t i = 0;
+			while (i < inbuf.size())
 			{
-				g_app.frontCamera = !g_app.frontCamera;
-				g_app.requestRestartVideo = true;
-				g_app.saveSettings();
-				g_app.log(LogLevel::Info, "Switching camera (asked by the phone).");
+				const unsigned char c = (unsigned char)inbuf[i];
+				if (c == 'M')
+				{
+					if (inbuf.size() - i < 5) break;
+					uint32_t be = 0;
+					memcpy(&be, inbuf.data() + i + 1, 4);
+					const uint32_t len = ntohl(be);
+					if (len > 65536) { i++; continue; }
+					if (inbuf.size() - i - 5 < len) break;
+					handleMessage(inbuf.substr(i + 5, len));
+					i += 5 + len;
+				}
+				else
+				{
+					if (c == 'F')
+					{
+						g_app.frontCamera = !g_app.frontCamera;
+						g_app.requestRestartVideo = true;
+						g_app.saveSettings();
+						g_app.log(LogLevel::Info, "Switching camera (asked by the phone).");
+					}
+					i++;
+				}
 			}
+			inbuf.erase(0, i);
 		}
 		else if (std::chrono::steady_clock::now() - lastHeard > std::chrono::seconds(6))
 		{
@@ -423,6 +694,8 @@ void PhoneLink::serveSession(SOCKET s, const std::string& host, int rtspPort)
 			break;
 		}
 	}
+	g_app.clearPhoneInfo();
+	g_app.phoneTalksBack = false;
 	m_stopVideo = true;
 	if (m_video.joinable()) m_video.join();
 	g_frames.setState(ocam::STATE_IDLE);
@@ -438,7 +711,9 @@ void PhoneLink::videoLoop(std::string host, int port)
 	{
 		const QualityPreset& q = kQualityPresets[g_app.quality.load()];
 		std::ostringstream url;
-		url << "rtsp://" << host << ":" << port << "?h264=" << q.kbps << "-" << q.fps << "-" << q.width << "-" << q.height
+		const int fps = std::max(10, std::min(120, g_app.frameRate.load()));
+		const int kbps = (int)(q.kbps * std::max(1.0, fps / 30.0)); // more frames need more bits
+		url << "rtsp://" << host << ":" << port << "?h264=" << kbps << "-" << fps << "-" << q.width << "-" << q.height
 		    << "&camera=" << (g_app.frontCamera ? "front" : "back");
 		g_app.requestRestartVideo = false;
 
@@ -465,7 +740,7 @@ void PhoneLink::videoLoop(std::string host, int port)
 		}
 
 		g_app.hwDecodeActive = rx.hwActive();
-		g_app.log(LogLevel::Info, std::string("Video started (") + q.label + ", " + (rx.hwActive() ? "GPU" : "CPU") + " decoding).");
+		g_app.log(LogLevel::Info, std::string("Video started (") + q.label + " " + std::to_string(fps) + " fps, " + (rx.hwActive() ? "GPU" : "CPU") + " decoding).");
 		g_frames.setMirror(g_app.mirror);
 
 		int frames = 0;
@@ -475,6 +750,15 @@ void PhoneLink::videoLoop(std::string host, int port)
 		bool live = false;
 		while (!m_stopVideo && !g_app.requestRestartVideo)
 		{
+			// Rotation: fixed by the user, or what the phone says is upright.
+			const int mode = g_app.rotationMode.load();
+			int rot = (mode - 1) * 90;
+			if (mode == 0)
+			{
+				const PhoneStatus st = g_app.getStatus();
+				rot = st.valid && st.rotation >= 0 ? st.rotation : 0;
+			}
+			rx.setTransform(rot, g_app.fillFrame);
 			const int r = rx.step(g_frames);
 			if (r < 0)
 			{
@@ -493,6 +777,10 @@ void PhoneLink::videoLoop(std::string host, int port)
 				}
 				frames++;
 				procSum += rx.lastProcessMs();
+				g_app.appliedRotation = rx.appliedRotation();
+				g_app.cropTop = rx.cropTop();
+				g_app.cropHeight = rx.cropHeight();
+				g_app.setLuma(rx.histogram(), rx.meanLuma());
 			}
 			g_frames.setMirror(g_app.mirror);
 			const auto now = std::chrono::steady_clock::now();

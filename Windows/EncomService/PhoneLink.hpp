@@ -6,6 +6,9 @@
 //   phone -> PC : 4 x int32 phone IPv4 octets, int32 RTSP port,
 //                 [optional, new app] int32 'OCAM' magic, int32 len, UTF-8 name
 //   phone -> PC : any bytes afterwards are heartbeats (old app: 2 bytes/s)
+// Pro controls (phone app 3.1+, ignored by older apps):
+//   PC -> phone : text lines "HELLO 2", "SET key=value ...", "POINT x y"
+//   phone -> PC : 'M' + int32 length + text: "CAPS ...", "STAT ...", "EVT ..."
 // Discovery (UDP 65501, new):
 //   phone broadcasts "OPENCAMERA?"; PC answers "OPENCAMERA1|<pc name>|65500".
 //   PC also broadcasts the same answer once a second.

@@ -33,6 +33,18 @@ private:
 	void refreshEnvironment(bool force);
 	void installVirtualCamera();
 
+	// Pro controls (UiPro.cpp)
+	void drawProStrip(const ImVec2& pos, const ImVec2& size);
+	void drawProPopup();
+	void drawPreviewTools(const ImVec2& panelMin, const ImVec2& panelMax);
+	void drawOverlays(const ImVec2& a, const ImVec2& b, bool mirror);
+	void handlePreviewClick(const ImVec2& a, const ImVec2& b, bool mirror);
+	void updateOverlay(const uint8_t* data, int w, int h, int stride);
+	bool pill(const char* id, const char* label, bool active, ImVec2& cursor, bool rightAligned);
+	bool chip(const char* label, bool selected, bool enabled = true);
+	int chipGrid(const std::vector<std::string>& labels, int selected, bool enabled = true);
+	void popupTitle(const char* title, const char* hint);
+
 	bool segmented(const char* id, const char* const* labels, int count, int* value);
 	bool toggle(const char* label, bool* v, const char* hint = nullptr);
 	bool primaryButton(const char* label, const ImVec2& size, ImU32 color);
@@ -55,6 +67,17 @@ private:
 	int64_t m_texCounter = -1;
 	bool m_texValid = false;
 	ocam::FrameReader m_preview;
+
+	// zebra / focus-peaking overlay, half the video resolution
+	GLuint m_ovTex = 0;
+	int m_ovW = 0, m_ovH = 0;
+	bool m_ovValid = false;
+	std::vector<uint32_t> m_ovPixels;
+	std::vector<uint8_t> m_ovLuma;
+	int m_proOpen = -1;       // which pro pop-up is open
+	float m_proAnchorX = 0, m_proAnchorY = 0;
+	ImVec2 m_focusMark{ 0, 0 };
+	double m_focusMarkTime = -10;
 
 	bool m_showActivity = false;
 	bool m_vcamInstalled = false;

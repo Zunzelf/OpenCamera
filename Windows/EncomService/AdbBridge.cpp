@@ -1,6 +1,7 @@
 #include "AdbBridge.hpp"
 #include "AppState.hpp"
 
+#include <WinSock2.h>
 #include <Windows.h>
 
 #include <algorithm>
@@ -24,6 +25,40 @@ static std::wstring EnvDir(const wchar_t* name)
 	wchar_t buf[MAX_PATH] = {};
 	const DWORD n = GetEnvironmentVariableW(name, buf, MAX_PATH);
 	return n > 0 && n < MAX_PATH ? std::wstring(buf) : std::wstring();
+}
+
+// Version of the adb server already running on this PC (0 = none), asked
+// over its socket so nothing gets restarted.
+static int RunningServerVersion()
+{
+	SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (s == INVALID_SOCKET) return 0;
+	sockaddr_in a{};
+	a.sin_family = AF_INET;
+	a.sin_port = htons(5037);
+	a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	DWORD tmo = 1000;
+	setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tmo, sizeof(tmo));
+	int version = 0;
+	if (connect(s, (sockaddr*)&a, sizeof(a)) == 0)
+	{
+		static const char req[] = "000chost:version";
+		send(s, req, (int)sizeof(req) - 1, 0);
+		char buf[12] = {};
+		int got = 0;
+		while (got < 12)
+		{
+			const int n = recv(s, buf + got, 12 - got, 0);
+			if (n <= 0) break;
+			got += n;
+		}
+		if (got == 12 && memcmp(buf, "OKAY", 4) == 0)
+			version = (int)strtol(std::string(buf + 8, 4).c_str(), nullptr, 16);
+		else
+			version = -1; // something answers, but not like adb
+	}
+	closesocket(s);
+	return version;
 }
 
 std::wstring AdbBridge::findAdb()
@@ -173,13 +208,35 @@ void AdbBridge::loop()
 		{
 			m_adb = findAdb();
 			nextSearch = now + std::chrono::seconds(30);
+			if (!m_adb.empty())
+			{
+				std::string v;
+				run(L"version", v);
+				const size_t at = v.find("version 1.0.");
+				if (at != std::string::npos) m_clientVersion = atoi(v.c_str() + at + 12);
+			}
 			if (!m_adb.empty() && !announcedAdb)
 			{
 				announcedAdb = true;
 				g_app.log(LogLevel::Info, "USB cable mode is available (adb found). Plug in a phone with USB debugging on.");
 			}
 		}
-		if (!m_adb.empty())
+		// Another program (Android Studio, scrcpy...) may run a different adb
+		// version. Talking to it with ours would restart its server and break
+		// both, so stay out of the way until it's gone.
+		bool clash = false;
+		if (!m_adb.empty() && m_clientVersion > 0)
+		{
+			const int server = RunningServerVersion();
+			clash = server > 0 && server != m_clientVersion;
+			if (clash && !m_warnedMismatch)
+			{
+				m_warnedMismatch = true;
+				g_app.log(LogLevel::Warning, "USB cable mode is paused: another program is running a different adb version. Close it (or use the same adb) to use the cable.");
+			}
+			if (!clash) m_warnedMismatch = false;
+		}
+		if (!m_adb.empty() && !clash)
 		{
 			std::string out;
 			std::set<std::string> ready, seen;

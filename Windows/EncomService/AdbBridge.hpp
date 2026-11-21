@@ -36,4 +36,6 @@ private:
 	std::set<std::string> m_reversed;   // serials with reverse set up
 	std::set<std::string> m_warned;     // serials we told the user about (unauthorized)
 	unsigned m_checkTick = 0;
+	int m_clientVersion = 0;            // from "adb version", e.g. 41
+	bool m_warnedMismatch = false;
 };

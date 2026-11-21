@@ -613,7 +613,7 @@ void Ui::drawOnboarding(const ImVec2& origin, const ImVec2& size)
 		ImGui::SetCursorScreenPos(ImVec2(p.x, ImGui::GetCursorScreenPos().y + px(10)));
 	};
 	step(1, "Open the OpenCamera app on your Android phone", nullptr);
-	step(2, "Put the phone on the same Wi-Fi as this PC", "A phone hotspot works too: connect this PC to it.");
+	step(2, "Put the phone on the same Wi-Fi as this PC, or plug it in", "USB cable: turn on USB debugging on the phone. A phone hotspot works too.");
 	step(3, "Tap this computer in the app's list", nullptr);
 
 	// The PC's name as it appears on the phone, plus the address fallback.

@@ -495,8 +495,9 @@ void PhoneLink::controlLoop()
 			closesocket(client);
 			continue;
 		}
-		// Through adb the phone shows up as 127.0.0.1: that is the USB cable.
-		g_app.linkKind = (peer.sin_addr.s_addr == htonl(INADDR_LOOPBACK) && !m_adb.serial().empty()) ? 2 : LinkKind(client);
+		// Through adb the phone shows up as 127.0.0.1: that is the USB cable
+		// (it can connect before our adb helper has finished its first round).
+		g_app.linkKind = peer.sin_addr.s_addr == htonl(INADDR_LOOPBACK) ? 2 : LinkKind(client);
 		g_app.setPhone(name.empty() ? "Phone" : name, host);
 		{
 			static const char* kinds[] = { "", " over Wi-Fi", " over the USB cable", " over a network cable", " on this PC" };
@@ -803,7 +804,18 @@ void PhoneLink::videoLoop(std::string host, int port)
 		const int fps = std::max(10, std::min(120, g_app.frameRate.load()));
 		const int kbps = (int)(q.kbps * std::max(1.0, fps / 30.0)); // more frames need more bits
 		// USB cable: reach the phone's RTSP port through adb, RTP inside the RTSP connection.
-		const bool viaAdb = host == "127.0.0.1" && !m_adb.serial().empty();
+#ifdef OPENCAMERA_LOOPBACK_TEST
+		const bool viaAdb = false; // the fake phone in tests runs on this PC
+#else
+		const bool viaAdb = host == "127.0.0.1";
+#endif
+		if (viaAdb && m_adb.serial().empty())
+		{
+			// adb helper still starting (or adb went away): wait for it.
+			for (int i = 0; i < 10 && !m_stopVideo; i++)
+				std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			continue;
+		}
 		if (viaAdb && !m_adb.forward(port))
 		{
 			g_app.log(LogLevel::Warning, "Couldn't reach the phone through the USB cable (adb forward failed). Retrying...");

@@ -5,7 +5,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.cns.encom"
+        applicationId = "io.github.zunzelf.opencamera"
         minSdk = 21
         targetSdk = 36
         versionCode = 10

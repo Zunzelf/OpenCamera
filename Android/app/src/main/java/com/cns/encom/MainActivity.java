@@ -325,7 +325,7 @@ public class MainActivity extends Activity {
             subtitle.setText(R.string.need_camera);
         } else if (connected) {
             title.setText(connectedName);
-            subtitle.setText(s == LinkState.LIVE ? "Your phone is the webcam now. Pick \"OpenCamera\" in your video app."
+            subtitle.setText(s == LinkState.LIVE ? "Your phone is the webcam now. Pick \"OpenCamera Z\" in your video app."
                     : s == LinkState.WAITING_PC ? "If the PC asks, click Allow. Video starts by itself."
                     : s == LinkState.RECONNECTING ? "Make sure OpenCamera is still open on the PC and both are on the same Wi-Fi."
                     : "Saying hello to the PC…");

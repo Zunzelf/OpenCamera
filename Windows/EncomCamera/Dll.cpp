@@ -32,9 +32,10 @@ STDAPI AMovieSetupUnregisterServer( CLSID clsServer );
 
 
 
-// {8E14549A-DB61-4309-AFA1-3578E927E933}
+// {191F6B23-B6B0-4897-A5C8-F735F36E265E}  (own ID: the original OpenCamera and
+// the sample it came from used {8E14549A-...}, so both can be installed side by side)
 DEFINE_GUID(CLSID_VirtualCam,
-            0x8e14549a, 0xdb61, 0x4309, 0xaf, 0xa1, 0x35, 0x78, 0xe9, 0x27, 0xe9, 0x33);
+            0x191f6b23, 0xb6b0, 0x4897, 0xa5, 0xc8, 0xf7, 0x35, 0xf3, 0x6e, 0x26, 0x5e);
 
 
 const AMOVIESETUP_MEDIATYPE AMSMediaTypesVCam = 
@@ -59,7 +60,7 @@ const AMOVIESETUP_PIN AMSPinVCam=
 const AMOVIESETUP_FILTER AMSFilterVCam =
 {
     &CLSID_VirtualCam,  // Filter CLSID
-    L"OpenCamera",     // String name
+    L"OpenCamera Z",     // String name
     MERIT_DO_NOT_USE,      // Filter merit
     1,                     // Number pins
     &AMSPinVCam             // Pin details
@@ -68,7 +69,7 @@ const AMOVIESETUP_FILTER AMSFilterVCam =
 CFactoryTemplate g_Templates[] = 
 {
     {
-        L"OpenCamera",
+        L"OpenCamera Z",
         &CLSID_VirtualCam,
         CVCam::CreateInstance,
         NULL,
@@ -95,7 +96,7 @@ STDAPI RegisterFilters( BOOL bRegister )
     hr = CoInitialize(0);
     if(bRegister)
     {
-        hr = AMovieSetupRegisterServer(CLSID_VirtualCam, L"OpenCamera", achFileName, L"Both", L"InprocServer32");
+        hr = AMovieSetupRegisterServer(CLSID_VirtualCam, L"OpenCamera Z", achFileName, L"Both", L"InprocServer32");
     }
 
     if( SUCCEEDED(hr) )
@@ -112,7 +113,7 @@ STDAPI RegisterFilters( BOOL bRegister )
                 rf2.dwMerit = MERIT_DO_NOT_USE;
                 rf2.cPins = 1;
                 rf2.rgPins = &AMSPinVCam;
-                hr = fm->RegisterFilter(CLSID_VirtualCam, L"OpenCamera", &pMoniker, &CLSID_VideoInputDeviceCategory, NULL, &rf2);
+                hr = fm->RegisterFilter(CLSID_VirtualCam, L"OpenCamera Z", &pMoniker, &CLSID_VideoInputDeviceCategory, NULL, &rf2);
             }
             else
             {

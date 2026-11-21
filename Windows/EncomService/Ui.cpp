@@ -14,7 +14,7 @@
 #include "UiTheme.hpp"
 
 // Virtual camera CLSID (see EncomCamera/Dll.cpp)
-static const char* kVcamKey = "CLSID\\{8E14549A-DB61-4309-AFA1-3578E927E933}\\InprocServer32";
+static const char* kVcamKey = "CLSID\\{191F6B23-B6B0-4897-A5C8-F735F36E265E}\\InprocServer32";
 
 void Ui::fatal(const std::string& message)
 {
@@ -225,7 +225,7 @@ void Ui::installVirtualCamera()
 		}
 		refreshEnvironment(true);
 		g_app.log(m_vcamInstalled ? LogLevel::Info : LogLevel::Warning,
-			m_vcamInstalled ? "Virtual camera installed. Restart Zoom/Teams/your browser to see \"OpenCamera\"." : "The virtual camera was not installed.");
+			m_vcamInstalled ? "Virtual camera installed. Restart Zoom/Teams/your browser to see \"OpenCamera Z\"." : "The virtual camera was not installed.");
 	}
 	else
 	{
@@ -587,7 +587,7 @@ void Ui::drawOnboarding(const ImVec2& origin, const ImVec2& size)
 	ImGui::PushFont(m_fontTitle);
 	ImGui::TextUnformatted("Connect your phone");
 	ImGui::PopFont();
-	ImGui::TextColored(col::muted, "Three steps, then pick \"OpenCamera\" as the camera in Zoom, Teams, Discord or your browser.");
+	ImGui::TextColored(col::muted, "Three steps, then pick \"OpenCamera Z\" as the camera in Zoom, Teams, Discord or your browser.");
 	ImGui::Dummy(ImVec2(0, px(10)));
 
 	auto step = [&](int n, const char* title, const char* sub) {
@@ -816,7 +816,7 @@ void Ui::drawSidebar(const ImVec2& size)
 		ImGui::PushFont(m_fontSmall);
 		ImGui::PushTextWrapPos(0);
 		if (m_vcamInstalled)
-			ImGui::TextColored(col::muted, "Installed. Choose \"OpenCamera\" as the camera in your video app.");
+			ImGui::TextColored(col::muted, "Installed. Choose \"OpenCamera Z\" as the camera in your video app.");
 		else if (m_vcamOther)
 			ImGui::TextColored(col::warn, "An older OpenCamera camera is installed. Update it so video apps get this picture.");
 		else

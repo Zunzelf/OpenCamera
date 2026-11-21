@@ -80,6 +80,11 @@ Camera-style manual controls on the PC, sent to the phone over the existing cont
 - adb is started with only its output pipe inherited, so the adb server never holds OpenCamera's ports.
 - Windows names the tethering network "Unidentified network" and treats it as **Public**. OpenCamera's firewall rule on this PC only allows **Private** networks, so the phone stays on Wi-Fi until that network is set to Private in Windows settings.
 
+### Own identity (so it can sit beside the original)
+- Phone app ID is now `io.github.zunzelf.opencamera` (was `com.cns.encom`, the original's Play Store ID). It installs as a separate app.
+- The virtual camera is called **"OpenCamera Z"** with its own ID `{191F6B23-B6B0-4897-A5C8-F735F36E265E}` (the original, and the sample it came from, used `{8E14549A-...}`). Registering it no longer replaces another app's camera.
+- Kept for compatibility: ports 65500/65501 and the control protocol, so the original phone app still works with this PC app.
+
 ## What was verified, and what wasn't
 
 | Item | Status |

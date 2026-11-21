@@ -1,25 +1,20 @@
 <resources>
     <string name="app_name">OpenCamera</string>
-    <string name="action_settings">Settings</string>
-    <!-- Strings used for fragments for navigation -->
-
-
-    <string name="button1">Scan local</string>
-    <string name="button2">Connect</string>
-    <string name="button3">Disconnect</string>
-    <string name="button4">Clear</string>
-    <string name="button5">Switch Camera</string>
-
-    <string name="hello_first_fragment">Hello first fragment</string>
-    <string name="hello_second_fragment">Hello second fragment. Arg: %1$s</string>
-    <string name="logs_and_outputs">Logs will appear here..\n</string>
-    <string name="mic">Mic</string>
-    <string name="cam">Cam</string>
-    <string name="Indicator_myip">Device IP: </string>
-    <string name="Indicator_speed">Speed: </string>
-    <string name="Indicator_hostip">Host IP: </string>
-    <string name="destination_host_ip">Host IP</string>
-    <string name="checkBox">Camera Status</string>
-    <string name="switch1">Dark mode</string>
-
+    <string name="choose_computer">Choose your computer</string>
+    <string name="choose_hint">Open OpenCamera on your PC. It shows up here when both are on the same Wi-Fi.</string>
+    <string name="searching">Looking for computers…</string>
+    <string name="type_address">Type the address shown on the PC</string>
+    <string name="address_hint">e.g. 192.168.1.20</string>
+    <string name="connect">Connect</string>
+    <string name="switch_camera">Switch camera</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="keep_open">Keep this app open while you use the camera. The screen can dim, but don\'t switch apps.</string>
+    <string name="need_camera">OpenCamera needs camera access to work as a webcam.</string>
+    <string name="grant">Allow camera</string>
+    <string name="last_used">Last used</string>
+    <string name="settings">Settings</string>
+    <string name="light_off">Light</string>
+    <string name="light_on">Light on</string>
+    <string name="preview_off">Preview is off to save battery.
+The PC still gets video.</string>
 </resources>

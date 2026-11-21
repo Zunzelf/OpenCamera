@@ -26,6 +26,7 @@ import net.majorkernelpanic.streaming.audio.AudioQuality;
 import net.majorkernelpanic.streaming.audio.AudioStream;
 import net.majorkernelpanic.streaming.gl.SurfaceView;
 import net.majorkernelpanic.streaming.video.H263Stream;
+import net.majorkernelpanic.streaming.video.Camera2H264Stream;
 import net.majorkernelpanic.streaming.video.H264Stream;
 import net.majorkernelpanic.streaming.video.VideoQuality;
 import net.majorkernelpanic.streaming.video.VideoStream;
@@ -125,7 +126,7 @@ public class SessionBuilder {
 			session.addVideoTrack(new H263Stream(mCamera));
 			break;
 		case VIDEO_H264:
-			H264Stream stream = new H264Stream(mCamera);
+			H264Stream stream = Camera2H264Stream.available() ? new Camera2H264Stream(mCamera) : new H264Stream(mCamera);
 			if (mContext!=null) 
 				stream.setPreferences(PreferenceManager.getDefaultSharedPreferences(mContext));
 			session.addVideoTrack(stream);

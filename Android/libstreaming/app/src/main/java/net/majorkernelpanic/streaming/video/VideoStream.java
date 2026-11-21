@@ -280,7 +280,12 @@ public abstract class VideoStream extends MediaStream {
 
 	/** Stops the stream. */
 	public synchronized void stop() {
-		if (mCamera != null) {
+		if (mCamera == null) {
+			// No Camera1 in use (e.g. Camera2H264Stream): just stop the encoder.
+			super.stop();
+			return;
+		}
+		{
 			if (mMode == MODE_MEDIACODEC_API) {
 				mCamera.setPreviewCallbackWithBuffer(null);
 			}
@@ -513,6 +518,10 @@ public abstract class VideoStream extends MediaStream {
 		mediaFormat.setInteger(MediaFormat.KEY_FRAME_RATE, mQuality.framerate);	
 		mediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
 		mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+		if (android.os.Build.VERSION.SDK_INT >= 23) {
+			// 0 = realtime priority: the encoder must keep up rather than batch.
+			mediaFormat.setInteger(MediaFormat.KEY_PRIORITY, 0);
+		}
 		mMediaCodec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
 		Surface surface = mMediaCodec.createInputSurface();
 		((SurfaceView)mSurfaceView).addMediaCodecSurface(surface);
@@ -704,6 +713,16 @@ public abstract class VideoStream extends MediaStream {
 	 * Blocks the thread in which this function is called.
 	 */
 	private void measureFramerate() {
+		// The measured value is cached per camera format; measuring blocks
+		// the start of every session for up to 2 s, so reuse it.
+		final String cacheKey = PREF_PREFIX+"fps"+mRequestedQuality.framerate+","+mCameraImageFormat+","+mRequestedQuality.resX+mRequestedQuality.resY;
+		if (mSettings != null && mSettings.contains(cacheKey)) {
+			int cached = mSettings.getInt(cacheKey, 0);
+			if (cached > 0) {
+				mQuality.framerate = cached;
+				return;
+			}
+		}
 		final Semaphore lock = new Semaphore(0);
 
 		final Camera.PreviewCallback callback = new Camera.PreviewCallback() {

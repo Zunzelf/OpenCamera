@@ -1,31 +1,53 @@
 # OpenCamera
 
-[![Github release](https://img.shields.io/github/downloads/yukimuon/opencamera/total.svg?color=black&style=flat-square&labelColor=f0f0f0)](https://github.com/yukimuon/OpenCamera/releases)
+Use your Android phone as a webcam on Windows, over Wi-Fi or a USB cable.
 
-This is an open source version of [DroidCam - Webcam for PC](https://play.google.com/store/apps/details?id=com.dev47apps.droidcam&hl=en_US&gl=US), which enables your phone to work as a webcam.
+This is a reworked version of [OpenCamera](https://github.com/changliu98/OpenCamera), an open-source alternative to DroidCam. Both apps were redesigned, the video path was rebuilt for lower delay, and the PC app gained camera-style manual controls. See [IMPROVEMENTS.md](IMPROVEMENTS.md) for what changed and what was tested.
 
-### What this app does
+<p>
+  <img src="Assets/screens/pc-connect.png" width="640" alt="OpenCamera on Windows, waiting for a phone">
+</p>
 
-This app enable you to use Android phone's camera as a webcam on a Windows desktop
+## What it does
 
-### How to use it
+- **Phone as webcam:** shows up as a camera called "OpenCamera" in Zoom, Teams, Discord, OBS and browsers.
+- **Wi-Fi or USB cable:** the phone finds the PC by itself on the same Wi-Fi. Plug in a cable with USB debugging on and it moves to the cable automatically, then back to Wi-Fi if you unplug it. The PC shows which one is in use.
+- **Pro controls on the PC:** ISO, shutter, exposure compensation, white balance (presets or Kelvin), manual focus, zoom, exposure lock, the phone's light, stabilisation and anti-flicker. Click the picture to focus there.
+- **Monitoring aids:** grid, histogram, zebra (clipped highlights), focus peaking and a level line.
+- **Rotation:** rotate in steps, follow how the phone is held, or crop a portrait picture to fill 16:9.
+- **Quality:** 480p, 720p or 1080p at the frame rates your phone supports.
+- **Phone settings:** turn off the phone's preview to save battery and heat, choose how much data the video uses, dim the screen while live.
+- **Readouts:** the PC shows the phone's battery and warns when it gets warm.
 
-A Windows desktop, an Android phone, they are under same WiFi network with local network access
+<p>
+  <img src="Assets/screens/phone-live.png" width="220" alt="Phone app, live over the USB cable">
+  <img src="Assets/screens/phone-settings.png" width="220" alt="Phone app settings">
+  <img src="Assets/screens/pc-phone-card.png" width="300" alt="PC app showing the phone connected by USB cable">
+</p>
 
-1.   Install the [OpenCamera Windows software](https://github.com/yukimuon/OpenCamera/releases/tag/2.1.2) on your desktop, then install [the OpenCamera Android app](https://play.google.com/store/apps/details?id=com.cns.encom) on your phone.
-2.   Open the OpenCamera Windows software, it will create a virtual camera device, note that this app requires Admin privileges
-3.   Find the IP of your desktop, and open your app on the phone  
-    <img src="Assets/image_2020-12-09_17-03-20.png" width=200px>
-4.   Input the IP address of your desktop on the input box, click the "CONNECT" button
-    <img src="Assets/Screenshot_20201211-004808.jpg" width=200px>
-5.   Your desktop can use the camera through the app on your phone
-6.   If you want to stop sharing, simply kill the app on your phone or click "DISCONNECT" button
+## How to use it
 
+You need a Windows 10/11 PC (64-bit) and an Android phone (Android 5 or newer).
 
-### Compatibility
+1. Install and open OpenCamera on the PC. Click **Install virtual camera** once (Windows asks for permission).
+2. Open the OpenCamera app on the phone.
+3. Connect them in one of these ways:
+   - **Wi-Fi:** put both on the same Wi-Fi, then tap the PC's name in the phone app. A phone hotspot works too. If Windows Firewall asks, allow OpenCamera on private networks.
+   - **USB cable:** turn on USB debugging on the phone and plug it in. The PC uses `adb` (from the Android SDK platform-tools, scrcpy, or placed next to OpenCamera) and connects through the cable by itself.
+4. Pick **OpenCamera** as the camera in your video app.
 
-Due to DirectShow, not all programs can use the virtual cam on your device.  
-Software compatibility:  
+Keep the phone app open while you use the camera; Android doesn't let apps use the camera in the background.
+
+## Building
+
+See the **Building** section of [IMPROVEMENTS.md](IMPROVEMENTS.md):
+
+- **PC:** Visual Studio 2019 or newer, `Windows/EncomService` (Release x64) and `Windows/EncomCamera` (x64 and Win32).
+- **Phone:** `cd Android && gradle assembleDebug`, or open `Android` in Android Studio.
+
+## Compatibility
+
+The virtual camera is a DirectShow filter. The original project reported these results:
 
 ![](https://img.shields.io/badge/-OK-black?style=flat&logo=Firefox&logoColor=ff6611)
 ![](https://img.shields.io/badge/-OK-black?style=flat&logo=Google%20Chrome&logoColor=4285F4)
@@ -35,15 +57,12 @@ Software compatibility:
 ![](https://img.shields.io/badge/-INCOMPATIBLE-black?style=flat&logo=skype&logoColor=00aff0)
 ![](https://img.shields.io/badge/-INCOMPATIBLE-black?style=flat&logo=Telegram)
 
-### Release
-<a href="https://github.com/yukimuon/OpenCamera/releases">Github release page</a>  
-<a href='https://play.google.com/store/apps/details?id=com.cns.encom'><img alt='Get it on Google Play' src='https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png' width='150px'></a>
+## License
 
-### Release logs
-v1.0.0 Error "fail to bind cam socket or mic socket" under hotspot. Noticeable lagging under slow network  
-v2.0.1 Fixed: animation not running on UI thread  
-v2.0.2 Fixed: Disconnect freezing problem  
-v2.1.1 Fixed: Ugly purple banner
+GPL-3.0, the same as the original project. See [LICENSE](LICENSE).
 
-### Further Plan
-Finished the transition to RTSP protocol. Future releases will only be fixes for critical bugs
+## Thanks
+
+This project stands on the work of the original OpenCamera developers: **yukimuon**, **teamclouday** and **Nagato**, with the repository hosted by **changliu98**. They designed the phone-to-PC protocol, the DirectShow virtual camera and the first Windows and Android apps, and released it all as open source so others could build on it. Thank you.
+
+Thanks also to the authors of [libstreaming](https://github.com/fyhertz/libstreaming), [FFmpeg](https://ffmpeg.org/), [Dear ImGui](https://github.com/ocornut/imgui) and [SDL](https://www.libsdl.org/), which this project uses.

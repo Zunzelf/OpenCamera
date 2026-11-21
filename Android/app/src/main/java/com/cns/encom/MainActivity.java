@@ -2,9 +2,12 @@ package com.cns.encom;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -12,6 +15,7 @@ import android.content.res.ColorStateList;
 import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
 import android.net.Uri;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -34,6 +38,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import net.majorkernelpanic.streaming.SessionBuilder;
 import net.majorkernelpanic.streaming.rtsp.RtspServer;
@@ -93,6 +98,7 @@ public class MainActivity extends Activity {
     private Button grant, torch;
     private TextureView preview;
     private TextView previewNote;
+    private TextView usbButton;
     private View settingsPanel;
     private LinearLayout settingsList;
     private final CameraEngine camera = CameraEngine.INSTANCE;
@@ -108,7 +114,13 @@ public class MainActivity extends Activity {
     private int rtspPort;
 
     // discovery
-    private static class Pc { String name; String host; long lastSeen; }
+    /** One computer, with every address it answered from (Wi-Fi, USB cable...). */
+    private static class Pc {
+        String name;
+        final Map<String, Long> seen = new LinkedHashMap<>(); // host -> last reply
+        final Map<String, Boolean> usb = new HashMap<>();      // host -> reached over the USB cable
+    }
+    private static final long FRESH_MS = 5000;
     private final Map<String, Pc> found = Collections.synchronizedMap(new LinkedHashMap<>());
     private volatile boolean discovering;
     private Thread discoveryThread;
@@ -167,6 +179,7 @@ public class MainActivity extends Activity {
         torch = findViewById(R.id.torch);
         preview = findViewById(R.id.preview);
         previewNote = findViewById(R.id.preview_note);
+        usbButton = findViewById(R.id.use_usb);
         settingsPanel = findViewById(R.id.settings_panel);
         settingsList = findViewById(R.id.settings_list);
 
@@ -207,6 +220,7 @@ public class MainActivity extends Activity {
         });
         findViewById(R.id.settings).setOnClickListener(v -> showSettings(true));
         findViewById(R.id.settings_link).setOnClickListener(v -> showSettings(true));
+        usbButton.setOnClickListener(v -> useUsbCable());
         grant.setOnClickListener(v -> askCameraPermission(true));
 
         bindService(new Intent(this, RtspServer.class), rtspConnection, Context.BIND_AUTO_CREATE);
@@ -287,7 +301,7 @@ public class MainActivity extends Activity {
         switch (s) {
             case CONNECTING:   dot = R.color.accent; chip = "Connecting to " + connectedName + "…"; break;
             case WAITING_PC:   dot = R.color.warn;   chip = "Connected – accept on the PC if asked"; break;
-            case LIVE:         dot = R.color.good;   chip = "Live on " + connectedName; break;
+            case LIVE:         dot = R.color.good;   chip = "Live on " + connectedName + "  ·  " + linkLabel(); break;
             case RECONNECTING: dot = R.color.warn;   chip = "Connection lost – reconnecting…"; break;
             case NO_PERMISSION:dot = R.color.bad;    chip = "Camera access needed"; break;
             default:           dot = R.color.muted;  chip = "Not connected"; break;
@@ -300,6 +314,7 @@ public class MainActivity extends Activity {
         pickPanel.setVisibility(!connected && s != LinkState.NO_PERMISSION ? View.VISIBLE : View.GONE);
         livePanel.setVisibility(connected ? View.VISIBLE : View.GONE);
         grant.setVisibility(s == LinkState.NO_PERMISSION ? View.VISIBLE : View.GONE);
+        renderUsbButton();
 
         if (s == LinkState.NO_PERMISSION) {
             title.setText(R.string.app_name);
@@ -330,7 +345,11 @@ public class MainActivity extends Activity {
         List<Pc> pcs;
         synchronized (found) { pcs = new ArrayList<>(found.values()); }
         final String last = prefs.getString("last_host", "");
+        final String lastName = prefs.getString("last_name", "");
         for (Pc pc : pcs) {
+            final String host = bestHost(pc);
+            if (host == null) continue;
+            final boolean viaUsb = isUsbHost(pc, host);
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.VERTICAL);
             row.setBackgroundResource(R.drawable.bg_row);
@@ -347,13 +366,15 @@ public class MainActivity extends Activity {
             name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
             name.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
             TextView sub = new TextView(this);
-            sub.setText(pc.host.equals(last) ? pc.host + "  ·  " + getString(R.string.last_used) : pc.host);
+            String tag = host + "  ·  " + (viaUsb ? "USB cable" : "Wi-Fi");
+            if (pc.name.equals(lastName) || pc.seen.containsKey(last)) tag += "  ·  " + getString(R.string.last_used);
+            sub.setText(tag);
             sub.setTextColor(color(R.color.muted));
             sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
             row.addView(name);
             row.addView(sub);
             row.setContentDescription("Connect to " + pc.name);
-            row.setOnClickListener(v -> connect(pc.host, pc.name));
+            row.setOnClickListener(v -> connect(host, pc.name));
             pcList.addView(row);
         }
         searching.setVisibility(pcs.isEmpty() ? View.VISIBLE : View.GONE);
@@ -411,12 +432,20 @@ public class MainActivity extends Activity {
                     String msg = new String(p.getData(), 0, p.getLength(), StandardCharsets.UTF_8);
                     if (msg.startsWith("OPENCAMERA1|")) {
                         String[] parts = msg.split("\\|");
-                        Pc pc = new Pc();
-                        pc.host = p.getAddress().getHostAddress();
-                        pc.name = parts.length > 1 && !parts[1].isEmpty() ? parts[1] : pc.host;
-                        pc.lastSeen = System.currentTimeMillis();
-                        boolean isNew = found.put(pc.host, pc) == null;
-                        if (isNew) ui.post(() -> { renderPcList(); maybeAutoConnect(pc); });
+                        String host = p.getAddress().getHostAddress();
+                        String name = parts.length > 1 && !parts[1].isEmpty() ? parts[1] : host;
+                        boolean usb = isUsbAddress(p.getAddress());
+                        boolean isNew;
+                        Pc pc;
+                        synchronized (found) {
+                            pc = found.get(name);
+                            if (pc == null) { pc = new Pc(); pc.name = name; found.put(name, pc); }
+                            isNew = !pc.seen.containsKey(host);
+                            pc.seen.put(host, System.currentTimeMillis());
+                            pc.usb.put(host, usb);
+                        }
+                        final Pc fpc = pc;
+                        if (isNew) ui.post(() -> { renderPcList(); renderUsbButton(); maybeAutoConnect(fpc); });
                     }
                 } catch (SocketTimeoutException ignored) {
                 }
@@ -431,17 +460,130 @@ public class MainActivity extends Activity {
         boolean changed = false;
         synchronized (found) {
             Iterator<Pc> it = found.values().iterator();
-            while (it.hasNext()) if (now - it.next().lastSeen > 6000) { it.remove(); changed = true; }
+            while (it.hasNext()) {
+                Pc pc = it.next();
+                Iterator<Map.Entry<String, Long>> hi = pc.seen.entrySet().iterator();
+                while (hi.hasNext()) if (now - hi.next().getValue() > 6000) { hi.remove(); changed = true; }
+                if (pc.seen.isEmpty()) it.remove();
+            }
         }
-        if (changed) ui.post(this::renderPcList);
+        if (changed) ui.post(() -> { renderPcList(); renderUsbButton(); });
+    }
+
+    // ------------------------------------------------------------ Wi-Fi or USB cable
+    /** Android names the USB tethering network rndis0, usb0 or ncm0. */
+    private static boolean isUsbInterface(NetworkInterface ni) {
+        String n = ni.getName();
+        return n != null && (n.startsWith("rndis") || n.startsWith("usb") || n.startsWith("ncm"));
+    }
+
+    /** True when `a` sits on the phone's USB tethering network. */
+    private static boolean isUsbAddress(InetAddress a) {
+        byte[] t = a.getAddress();
+        try {
+            for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!ni.isUp() || !isUsbInterface(ni)) continue;
+                for (InterfaceAddress ia : ni.getInterfaceAddresses()) {
+                    byte[] m = ia.getAddress().getAddress();
+                    if (m.length != t.length) continue;
+                    int bits = ia.getNetworkPrefixLength();
+                    boolean same = true;
+                    for (int i = 0; i < m.length && bits > 0; i++, bits -= 8) {
+                        int mask = bits >= 8 ? 0xFF : (0xFF << (8 - bits)) & 0xFF;
+                        if ((m[i] & mask) != (t[i] & mask)) { same = false; break; }
+                    }
+                    if (same) return true;
+                }
+            }
+        } catch (Exception ignored) { }
+        return false;
+    }
+
+    private static boolean isUsbHost(Pc pc, String host) {
+        Boolean b = pc.usb.get(host);
+        return b != null && b;
+    }
+
+    /** The address to use for this PC now: the cable if it answers there (and the user prefers it), else the newest. */
+    private String bestHost(Pc pc) {
+        final boolean preferUsb = prefs.getBoolean("prefer_usb", true);
+        final long now = System.currentTimeMillis();
+        String best = null;
+        long bestSeen = 0;
+        synchronized (found) {
+            for (Map.Entry<String, Long> e : pc.seen.entrySet()) {
+                if (now - e.getValue() > FRESH_MS) continue;
+                boolean usb = isUsbHost(pc, e.getKey());
+                if (preferUsb && usb) return e.getKey();
+                if (!usb && e.getValue() > bestSeen) { best = e.getKey(); bestSeen = e.getValue(); }
+            }
+            if (best == null) // only the cable answers, or nothing fresh
+                for (Map.Entry<String, Long> e : pc.seen.entrySet())
+                    if (e.getValue() > bestSeen) { best = e.getKey(); bestSeen = e.getValue(); }
+        }
+        return best;
+    }
+
+    private String linkLabel() {
+        Link l = link;
+        return l != null && l.viaUsb ? "USB cable" : "Wi-Fi";
+    }
+
+    private boolean pluggedIntoUsb() {
+        Intent b = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        return b != null && b.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) == BatteryManager.BATTERY_PLUGGED_USB;
+    }
+
+    private void renderUsbButton() {
+        if (usbButton == null) return;
+        Link l = link;
+        boolean onUsb = l != null && l.viaUsb && state == LinkState.LIVE;
+        usbButton.setText(onUsb ? "Connected by USB cable" : "Use USB cable instead of Wi-Fi");
+        usbButton.setTextColor(color(onUsb ? R.color.good : R.color.accent));
+        usbButton.setEnabled(!onUsb);
+    }
+
+    /** Guide the user to turn on USB tethering; the link moves to the cable by itself. */
+    private void useUsbCable() {
+        Link l = link;
+        if (l != null && l.viaUsb) { Toast.makeText(this, "Already using the USB cable.", Toast.LENGTH_SHORT).show(); return; }
+        AlertDialog.Builder d = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        if (!pluggedIntoUsb()) {
+            d.setTitle("Plug in the USB cable")
+             .setMessage("Connect this phone to the PC with a USB cable, then tap this button again.\n\n"
+                     + "A cable is steadier than Wi-Fi and charges the phone while you film.")
+             .setPositiveButton("OK", null);
+        } else {
+            d.setTitle("Turn on USB tethering")
+             .setMessage("Android will open its sharing settings. Turn on \"USB tethering\", then come back here.\n\n"
+                     + "OpenCamera moves to the cable by itself, and goes back to Wi-Fi if you unplug it.")
+             .setPositiveButton("Open settings", (x, y) -> openTetherSettings())
+             .setNegativeButton("Cancel", null);
+        }
+        d.show();
+    }
+
+    private void openTetherSettings() {
+        Intent i = new Intent(Intent.ACTION_MAIN);
+        i.setComponent(new ComponentName("com.android.settings", "com.android.settings.TetherSettings"));
+        try {
+            startActivity(i);
+        } catch (ActivityNotFoundException | SecurityException e) {
+            try { startActivity(new Intent(Settings.ACTION_WIRELESS_SETTINGS)); }
+            catch (ActivityNotFoundException e2) { startActivity(new Intent(Settings.ACTION_SETTINGS)); }
+        }
     }
 
     // Reconnect to the PC used last time without asking, once per app start.
     private void maybeAutoConnect(Pc pc) {
         if (!autoConnectAllowed || state != LinkState.IDLE || link != null) return;
-        if (pc.host.equals(prefs.getString("last_host", "")) && prefs.getBoolean("auto_connect", true)) {
+        boolean known = pc.name.equals(prefs.getString("last_name", ""));
+        synchronized (found) { known |= pc.seen.containsKey(prefs.getString("last_host", "")); }
+        if (known && prefs.getBoolean("auto_connect", true)) {
+            String host = bestHost(pc);
+            if (host == null) return;
             autoConnectAllowed = false;
-            connect(pc.host, pc.name);
+            connect(host, pc.name);
         }
     }
 
@@ -458,8 +600,8 @@ public class MainActivity extends Activity {
         if (!hasCameraPermission()) { setState(LinkState.NO_PERMISSION); askCameraPermission(false); return; }
         if (link != null) link.shutdown();
         connectedName = name;
-        prefs.edit().putString("last_host", host).putBoolean("auto_connect", true).apply();
-        link = new Link(host);
+        prefs.edit().putString("last_host", host).putString("last_name", name).putBoolean("auto_connect", true).apply();
+        link = new Link(host, name);
         setState(LinkState.CONNECTING);
         link.start();
     }
@@ -630,6 +772,19 @@ public class MainActivity extends Activity {
         section(list, "CONNECTION");
         switchRow(list, "Reconnect automatically", "Connect to the last computer when the app opens.",
                 "auto_connect", true, on -> { });
+        switchRow(list, "Prefer the USB cable", "When the phone is plugged into the PC with USB tethering on, use the cable instead of Wi-Fi.",
+                "prefer_usb", true, on -> { });
+        Button usb = new Button(this);
+        usb.setText("Use USB cable…");
+        usb.setAllCaps(false);
+        usb.setTextColor(color(R.color.text));
+        usb.setBackgroundResource(R.drawable.bg_secondary);
+        usb.setStateListAnimator(null);
+        LinearLayout.LayoutParams ulp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
+        ulp.topMargin = dp(4);
+        ulp.bottomMargin = dp(8);
+        usb.setOnClickListener(v -> useUsbCable());
+        list.addView(usb, ulp);
         String last = prefs.getString("last_host", "");
         if (!last.isEmpty()) {
             Button forget = new Button(this);
@@ -641,7 +796,7 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
             lp.topMargin = dp(4);
             forget.setOnClickListener(v -> {
-                prefs.edit().remove("last_host").apply();
+                prefs.edit().remove("last_host").remove("last_name").apply();
                 address.setText("");
                 forget.setText("Forgotten");
                 forget.setEnabled(false);
@@ -777,7 +932,10 @@ public class MainActivity extends Activity {
 
     /** Keeps the control link to one PC alive, reconnecting until shutdown(). */
     private class Link extends Thread {
-        private final String host;
+        private final String fallbackHost; // used when discovery doesn't see the PC
+        private final String pcName;
+        volatile boolean viaUsb;
+        private volatile String host;
         private final AtomicBoolean wanted = new AtomicBoolean(true);
         private final AtomicBoolean flip = new AtomicBoolean(false);
         private volatile Socket socket;
@@ -785,9 +943,33 @@ public class MainActivity extends Activity {
         private volatile boolean pcTalksBack;
         private final Object writeLock = new Object();
 
-        Link(String host) {
+        Link(String host, String name) {
             super("link");
+            this.fallbackHost = host;
             this.host = host;
+            this.pcName = name;
+        }
+
+        /** Address for the next attempt: the best one discovery saw for this PC, else the last one used. */
+        private String pickHost() {
+            Pc pc = found.get(pcName);
+            String h = pc != null ? bestHost(pc) : null;
+            return h != null ? h : (host != null ? host : fallbackHost);
+        }
+
+        /** Move to a better path: the cable appeared, or the cable we were on went away. */
+        private boolean shouldMove(Socket s) {
+            if (viaUsb) {
+                try {
+                    NetworkInterface ni = NetworkInterface.getByInetAddress(s.getLocalAddress());
+                    if (ni == null || !ni.isUp()) return true;
+                } catch (Exception e) { return true; }
+                return !prefs.getBoolean("prefer_usb", true) && !pickHost().equals(host);
+            }
+            if (!prefs.getBoolean("prefer_usb", true)) return false;
+            Pc pc = found.get(pcName);
+            String h = pc != null ? bestHost(pc) : null;
+            return h != null && !h.equals(host) && isUsbHost(pc, h);
         }
 
         void requestFlip() { flip.set(true); }
@@ -859,10 +1041,17 @@ public class MainActivity extends Activity {
             final byte[] name = deviceName(getApplicationContext()).getBytes(StandardCharsets.UTF_8);
             while (wanted.get()) {
                 post(attempt == 0 ? LinkState.CONNECTING : LinkState.RECONNECTING);
+                boolean moving = false;
                 try {
+                    host = pickHost();
                     Socket s = new Socket();
                     socket = s;
                     s.connect(new InetSocketAddress(host, CONTROL_PORT), 3000);
+                    try {
+                        NetworkInterface ni = NetworkInterface.getByInetAddress(s.getLocalAddress());
+                        viaUsb = ni != null && isUsbInterface(ni);
+                    } catch (Exception e) { viaUsb = false; }
+                    ui.post(MainActivity.this::renderUsbButton);
                     s.setTcpNoDelay(true);
                     startRtsp();
                     DataOutputStream out = new DataOutputStream(s.getOutputStream());
@@ -882,12 +1071,15 @@ public class MainActivity extends Activity {
                     post(LinkState.WAITING_PC);
                     if (rtsp != null && rtsp.isStreaming()) post(LinkState.LIVE);
                     // Heartbeat twice a second; 'F' asks the PC to switch camera.
+                    // Every 2 s, check whether the USB cable came or went.
+                    int tick = 0;
                     while (wanted.get()) {
                         synchronized (writeLock) {
                             out.write(flip.getAndSet(false) ? 'F' : 1);
                             out.flush();
                         }
                         Thread.sleep(500);
+                        if (++tick % 4 == 0 && shouldMove(s)) { moving = true; break; }
                     }
                 } catch (IOException e) {
                     // fall through to retry
@@ -902,6 +1094,7 @@ public class MainActivity extends Activity {
                 }
                 if (!wanted.get()) break;
                 stopRtsp();
+                if (moving) { attempt = 0; continue; }
                 attempt++;
                 post(LinkState.RECONNECTING);
                 try { Thread.sleep(Math.min(5000, 1000L * attempt)); } catch (InterruptedException e) { break; }

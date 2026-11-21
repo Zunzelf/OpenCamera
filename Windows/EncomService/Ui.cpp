@@ -692,6 +692,25 @@ void Ui::drawSidebar(const ImVec2& size)
 			ImGui::TextUnformatted(name.empty() ? "Phone" : name.c_str());
 			ImGui::SameLine();
 			ImGui::TextColored(col::muted, "%s", addr.c_str());
+			// How the phone is connected: a small badge on the right.
+			static const char* kinds[] = { nullptr, "Wi-Fi", "USB cable", "Network cable", "This PC" };
+			const int kind = g_app.linkKind.load();
+			if (kind > 0 && kind < 5)
+			{
+				ImGui::SameLine();
+				ImGui::PushFont(m_fontSmall);
+				const ImVec2 ts = ImGui::CalcTextSize(kinds[kind]);
+				const float bw = ts.x + px(16), bh = ts.y + px(6);
+				const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+				const ImVec2 cur = ImGui::GetCursorScreenPos();
+				const ImVec2 p0(std::max(cur.x, right - bw), cur.y);
+				const ImVec4 tint = kind == 2 ? col::good : col::accent;
+				ImDrawList* bdl = ImGui::GetWindowDrawList();
+				bdl->AddRectFilled(p0, ImVec2(p0.x + bw, p0.y + bh), U32(tint, 0.18f), bh * 0.5f);
+				bdl->AddText(ImVec2(p0.x + px(8), p0.y + px(3)), U32(tint), kinds[kind]);
+				ImGui::Dummy(ImVec2(0, 0));
+				ImGui::PopFont();
+			}
 			if (showBattery)
 			{
 				ImGui::PushFont(m_fontSmall);

@@ -72,6 +72,12 @@ Camera-style manual controls on the PC, sent to the phone over the existing cont
 - The PC warns when the phone is warm (42 °C or more) or the battery is low.
 - All of these settings are remembered in `%APPDATA%\OpenCamera\settings.ini`.
 
+### Wi-Fi or USB cable
+- The PC shows a **"Wi-Fi" or "USB cable"** badge next to the phone's name (from the Windows adapter the connection arrived on; USB tethering appears as a Remote NDIS/NCM adapter). The phone's status chip says the same.
+- The phone groups each PC's addresses. With **"Prefer the USB cable"** on (default), it moves to the cable within about 2 s of the PC answering there, and goes back to Wi-Fi if the cable goes away.
+- **"Use USB cable instead of Wi-Fi"** on the phone checks the cable is plugged in, then opens Android's tethering screen; turning USB tethering on stays the user's tap.
+- Windows names the tethering network "Unidentified network" and treats it as **Public**. OpenCamera's firewall rule on this PC only allows **Private** networks, so the phone stays on Wi-Fi until that network is set to Private in Windows settings.
+
 ## What was verified, and what wasn't
 
 | Item | Status |

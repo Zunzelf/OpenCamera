@@ -132,6 +132,8 @@ public:
 	std::atomic<float> cropTop{ 0 };         // fill-frame crop, as fractions of the turned picture
 	std::atomic<float> cropHeight{ 1 };
 	std::atomic<bool> phoneTalksBack{ false };
+	// How the phone reaches this PC (see LinkKind in PhoneLink.cpp).
+	std::atomic<int> linkKind{ 0 }; // 0 unknown, 1 Wi-Fi, 2 USB cable, 3 network cable, 4 this PC
 
 	ProSettings getPro();
 	void setPro(const ProSettings& p, bool sendToPhone = true);

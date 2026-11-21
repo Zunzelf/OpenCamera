@@ -29,6 +29,44 @@ static const ULONG kBindAddr = INADDR_LOOPBACK;
 static const ULONG kBindAddr = INADDR_ANY; // every adapter, no internet needed
 #endif
 
+// Which kind of adapter carries this connection, from the PC's own address on it.
+// USB tethering shows up in Windows as a "Remote NDIS" (RNDIS) or NCM adapter.
+static int LinkKind(SOCKET s)
+{
+	sockaddr_in local{};
+	int len = sizeof(local);
+	if (getsockname(s, (sockaddr*)&local, &len) != 0) return 0;
+	if (local.sin_addr.s_addr == htonl(INADDR_LOOPBACK)) return 4;
+	ULONG size = 16 * 1024;
+	std::vector<unsigned char> buf(size);
+	ULONG rc = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, nullptr,
+		(IP_ADAPTER_ADDRESSES*)buf.data(), &size);
+	if (rc == ERROR_BUFFER_OVERFLOW)
+	{
+		buf.resize(size);
+		rc = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, nullptr,
+			(IP_ADAPTER_ADDRESSES*)buf.data(), &size);
+	}
+	if (rc != NO_ERROR) return 0;
+	for (auto* a = (IP_ADAPTER_ADDRESSES*)buf.data(); a; a = a->Next)
+	{
+		for (auto* u = a->FirstUnicastAddress; u; u = u->Next)
+		{
+			const auto* sa = (const sockaddr_in*)u->Address.lpSockaddr;
+			if (sa->sin_family != AF_INET || sa->sin_addr.s_addr != local.sin_addr.s_addr) continue;
+			if (a->IfType == IF_TYPE_IEEE80211) return 1;
+			std::wstring d = a->Description ? a->Description : L"";
+			for (auto& c : d) c = (wchar_t)towlower(c);
+			if (d.find(L"ndis") != std::wstring::npos || d.find(L"usb") != std::wstring::npos ||
+				d.find(L"android") != std::wstring::npos || d.find(L"ncm") != std::wstring::npos)
+				return 2;
+			// Not the cable: the PC may be wired to the router, but the phone is on Wi-Fi.
+			return a->IfType == IF_TYPE_SOFTWARE_LOOPBACK ? 4 : 1;
+		}
+	}
+	return 0;
+}
+
 static std::string AddrToString(const sockaddr_in& a)
 {
 	char buf[INET_ADDRSTRLEN] = {};
@@ -380,6 +418,7 @@ void PhoneLink::controlLoop()
 		g_app.phase = Phase::Waiting;
 		g_app.setMessage("Waiting for your phone", "");
 		g_app.setPhone("", "");
+		g_app.linkKind = 0;
 		g_app.fps = 0;
 		g_app.kbps = 0;
 		g_frames.setState(ocam::STATE_IDLE);
@@ -423,8 +462,13 @@ void PhoneLink::controlLoop()
 			closesocket(client);
 			continue;
 		}
+		g_app.linkKind = LinkKind(client);
 		g_app.setPhone(name.empty() ? "Phone" : name, host);
-		g_app.log(LogLevel::Info, "Connected to " + label + ".");
+		{
+			static const char* kinds[] = { "", " over Wi-Fi", " over the USB cable", " over a network cable", " on this PC" };
+			const int k = g_app.linkKind.load();
+			g_app.log(LogLevel::Info, "Connected to " + label + (k > 0 && k < 5 ? kinds[k] : "") + ".");
+		}
 		serveSession(client, host, rtspPort);
 		closesocket(client);
 		g_app.log(LogLevel::Info, "Phone disconnected.");

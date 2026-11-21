@@ -33,6 +33,7 @@ android {
 
     lint {
         abortOnError = false
+        checkReleaseBuilds = false // release builds shouldn't need the lint download
     }
 }
 
